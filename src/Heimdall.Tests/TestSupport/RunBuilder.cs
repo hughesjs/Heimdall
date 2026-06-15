@@ -1,8 +1,8 @@
 using Heimdall.Core.Models;
 
-namespace Heimdall.Tests.Polling;
+namespace Heimdall.Tests.TestSupport;
 
-/// <summary>Builds <see cref="RunRecord"/>s with sensible defaults for state-machine tests.</summary>
+/// <summary>Builds <see cref="RunRecord"/>s with sensible defaults for tests.</summary>
 internal static class RunBuilder
 {
     public static RunRecord Run(
@@ -14,7 +14,9 @@ internal static class RunBuilder
         string repo = "demo",
         string branch = "main",
         string actor = "alice",
-        string ev = "push") =>
+        string ev = "push",
+        IReadOnlyList<int>? prNumbers = null,
+        IReadOnlyList<string>? prAuthors = null) =>
         new(
             RunId: runId,
             WorkflowId: workflowId,
@@ -26,8 +28,8 @@ internal static class RunBuilder
             RunNumber: runNumber,
             Status: status,
             TriggeringActorLogin: actor,
-            PullRequestNumbers: [],
-            PullRequestAuthorLogins: [],
+            PullRequestNumbers: prNumbers ?? [],
+            PullRequestAuthorLogins: prAuthors ?? [],
             HtmlUrl: $"https://github.com/{owner}/{repo}/actions/runs/{runId}",
             CreatedAt: DateTimeOffset.UnixEpoch);
 }

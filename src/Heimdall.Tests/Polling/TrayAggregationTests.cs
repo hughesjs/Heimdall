@@ -1,7 +1,7 @@
 using Heimdall.Core.Models;
 using Heimdall.Core.Polling;
 using Shouldly;
-using static Heimdall.Tests.Polling.RunBuilder;
+using static Heimdall.Tests.TestSupport.RunBuilder;
 
 namespace Heimdall.Tests.Polling;
 
