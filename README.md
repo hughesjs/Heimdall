@@ -9,6 +9,7 @@
 [![Latest release](https://img.shields.io/github/v/release/hughesjs/Heimdall?sort=semver)](https://github.com/hughesjs/Heimdall/releases/latest)
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-informational)](#install)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
 
@@ -154,4 +155,4 @@ Org repo auto-discovery, multi-CI providers, and release dashboards are explicit
 
 ## License
 
-> ⚠️ No license file is committed yet — until one is added, default copyright applies. A `LICENSE` should be chosen before wider distribution.
+[MIT](LICENSE) © 2026 James Hughes
