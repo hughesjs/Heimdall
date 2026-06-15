@@ -69,12 +69,13 @@ Rules are **pure and synchronous** — field comparisons over an already-enriche
 
 ```csharp
 public record Identity(string Login);                 // + IReadOnlyList<string> CommitEmails with rule 4
-public record RepoContext(string Owner, string Name, string DefaultBranch);
+public record RepoConfig(string Owner, string Name, string DefaultBranch);  // persisted + runtime repo type
 
 public interface IRelevanceRule
 {
-    string Id { get; }   // stable key matching the settings toggle
-    bool IsRelevant(RunRecord run, Identity me, RepoContext repo);
+    string Id { get; }       // stable key matching the settings toggle
+    bool DefaultEnabled { get; }
+    bool IsRelevant(RunRecord run, Identity me, RepoConfig repo);
 }
 ```
 
@@ -84,7 +85,7 @@ public interface IRelevanceRule
 | My pull request | `MyPullRequest` | `run.PullRequestAuthorLogins.Contains(me.Login)` | on |
 | Default branch breaking | `DefaultBranchBreaking` | `run.HeadBranch == repo.DefaultBranch` (authorship-agnostic) | **off** |
 
-Toggles stored per `Id` in `AppSettings` (`Dictionary<string,bool>` — extensible for rule 4 with no schema change). `RepoContext.DefaultBranch` comes free from the `Repository.Get` access-validation on repo-add (cache in `RepoConfig`).
+Toggles stored per `Id` in `AppSettings` (`Dictionary<string,bool>` — extensible for rule 4 with no schema change); `RelevanceEngine.DefaultToggles()` derives the defaults from the rules. `RepoConfig.DefaultBranch` comes free from the `Repository.Get` access-validation on repo-add. (`RepoContext` from the original sketch was consolidated into the single `RepoConfig` type to avoid duplication.)
 
 **Rule 4 (fast-follow):** adds `CommitEmails` to `Identity`, makes a Compare-API call for the run's push range, matches login **or** configured email against commit authors. The first inherently-async rule — hence a fast-follow, not MVP.
 
@@ -95,14 +96,14 @@ Toggles stored per `Id` in `AppSettings` (`Dictionary<string,bool>` — extensib
 ```csharp
 public interface IGitHubGateway
 {
-    Task<RepoContext> ValidateAndDescribeAsync(string owner, string name, CancellationToken ct);
-    Task<IReadOnlyList<RunRecord>> GetRecentRunsAsync(RepoContext repo, CancellationToken ct); // one page, per_page=50
+    Task<RepoConfig> ValidateAndDescribeAsync(string owner, string name, CancellationToken ct);
+    Task<IReadOnlyList<RunRecord>> GetRecentRunsAsync(RepoConfig repo, CancellationToken ct); // one page, per_page=50
     RateLimitInfo? LastRateLimit { get; }
 }
 ```
 
 ### ETag conditional requests
-A `DelegatingHandler` sits below Octokit (inject via `Octokit.Internal.HttpClientAdapter(() => handler)` → `Connection` — **verify exact API against Octokit 14**). It keeps an in-memory map `requestUri → (etag, bufferedBody)`:
+A `DelegatingHandler` (`ConditionalGetHandler`) sits below Octokit, injected via `new Connection(productHeader, new Octokit.Internal.HttpClientAdapter(() => handler))` (confirmed against Octokit 14). It keeps an in-memory map `requestUri → (etag, bufferedBody)`:
 
 - **Outgoing**: attach `If-None-Match` if an ETag is stored for the URI.
 - **200**: store ETag + buffer body, pass through.
@@ -121,7 +122,7 @@ The run payload's `pull_requests[]` carries **no author**, so `MyPullRequest` ca
 
 ## 4. Poll loop (`Polling/`)
 
-`PollingService : IAsyncDisposable`, one background `Task` driven by `PeriodicTimer.WaitForNextTickAsync`. Events: `Transition` (NotificationPayload), `Aggregate` (TrayStatus), `Snapshot` (IReadOnlyList<PipelineState>).
+`PollingService` exposes `PollOnceAsync(AppSettings, ct)` (the testable cycle) and `RunAsync(ISettingsStore, ct)` (a `PeriodicTimer` loop that re-reads settings each cycle). Events: `Transition` (NotificationPayload), `Aggregate` (TrayStatus), `Snapshot` (IReadOnlyList<PipelineState>), `AuthenticationFailed`, `PollFailed`.
 
 ```
 read settings fresh (repos, toggles, interval, identity)
@@ -172,6 +173,20 @@ The device-code request takes `client_id` + scopes only. `PollForTokenAsync` own
 **AuthCoordinator**: `GetOrAuthenticate` → stored token short-circuits the flow; otherwise `RequestDeviceCode` → `onCodeReady(code)` (UI shows `user_code` + opens `verification_uri`) → `PollForToken` → store token. `Reauthenticate` clears then re-runs the flow (the gateway-401 recovery path).
 
 **Scopes**: read-only `repo` (classic) or fine-grained `contents:read, actions:read, pull_requests:read`.
+
+---
+
+## 6. App shell (`Heimdall` — tray, notifications, UI)
+
+`HeimdallOrchestrator` is the runtime brain: it owns the `TrayIcon` + `NativeMenu`, runs onboarding when there's no token, builds the gateway/polling service once authenticated, and marshals every `PollingService` event to the UI thread (`Dispatcher.UIThread.Post`) — `Aggregate` → tray icon, `Snapshot` → tray menu, `Transition` → notification, `AuthenticationFailed` → re-auth.
+
+- **Tray** (code-driven, not XAML, for control): icon per `TrayStatus` from `Assets/tray-{green,red,amber,grey}.png`; menu lists each pipeline (click → open the run), plus Settings and Quit. The app is tray-only (`ShutdownMode.OnExplicitShutdown`, no main window).
+- **Notifications** (`INotificationManager`, Core interface; platform impls in the app): Linux `notify-send`, macOS `osascript`, Windows PowerShell toast, selected by `NotificationManagerFactory`. `NotificationContent.Format` (pure, tested) builds the title/body. notify-send/osascript have no activation callback, so **click-to-open a run is offered via the tray menu**; the notification body itself is informational.
+- **Single instance**: `SingleInstanceLock` holds an exclusive `FileStream` (`FileShare.None`) for the process lifetime; a second launch exits quietly.
+- **ViewModels** (`CommunityToolkit.Mvvm`, UI-framework-free): `DeviceFlowViewModel` (onboarding state), `SettingsViewModel` (repos/identity/toggles/interval, validates a new repo via the gateway, persists). Tested as POCOs in `Heimdall.UiTests`.
+- **OAuth `client_id`** lives in `GitHubOAuth.ClientId` (public, not a secret) — a placeholder until the OAuth App is registered.
+
+Token stores and `RepoConfig` live in Core (Avalonia-free) rather than the app, so they're testable from `Heimdall.Tests`; only the tray/notification/window glue lives in the app.
 
 ---
 

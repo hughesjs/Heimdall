@@ -1,19 +1,10 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Heimdall.App"
-             xmlns:local="using:Heimdall"
              RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
-    <Application.DataTemplates>
-        <local:ViewLocator/>
-    </Application.DataTemplates>
-  
     <Application.Styles>
         <FluentTheme />
     </Application.Styles>
 
-    <!-- TODO: TrayIcon definition goes here (see SPEC.md section 7).
-         Aggregate tray indicator with green/red/amber/grey icons from Assets/,
-         and a tray menu (status list, settings, quit). -->
 </Application>
