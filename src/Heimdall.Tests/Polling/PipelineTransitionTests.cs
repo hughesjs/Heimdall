@@ -99,6 +99,19 @@ public class PipelineTransitionTests
     }
 
     [Fact]
+    public void Re_settling_to_the_same_status_after_in_progress_does_not_re_notify()
+    {
+        var (seeded, _) = PipelineStateMachine.Apply(null, Run(RunStatus.Success));
+        var (broke, n1) = PipelineStateMachine.Apply(seeded, Run(RunStatus.Failure, runId: 2, runNumber: 2));
+        n1.ShouldNotBeNull();
+
+        var (running, _) = PipelineStateMachine.Apply(broke, Run(RunStatus.InProgress, runId: 3, runNumber: 3));
+        var (_, n2) = PipelineStateMachine.Apply(running, Run(RunStatus.Failure, runId: 3, runNumber: 3));
+
+        n2.ShouldBeNull(); // still failing — no second "broke"
+    }
+
+    [Fact]
     public void Settling_from_an_unknown_only_baseline_does_not_notify()
     {
         var (seeded, _) = PipelineStateMachine.Apply(null, Run(RunStatus.Unknown));

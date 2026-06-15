@@ -58,4 +58,18 @@ public class PipelinePruningTests
 
         pruned.ShouldNotContainKey(key);
     }
+
+    [Fact]
+    public void Unseen_failing_key_is_retained_indefinitely_by_this_pure_helper()
+    {
+        // Pins current behaviour: the pure helper has no clock, so a failing line is retained across
+        // arbitrarily many cycles. Age-based eviction is the polling service's job (M4).
+        var (key, state) = Line(RunStatus.Failure, inProgress: false, "broken");
+        IReadOnlyDictionary<PipelineKey, PipelineState> map = new Dictionary<PipelineKey, PipelineState> { [key] = state };
+
+        for (var cycle = 0; cycle < 100; cycle++)
+            map = PipelineStateMachine.Prune(map, new HashSet<PipelineKey>());
+
+        map.ShouldContainKey(key);
+    }
 }

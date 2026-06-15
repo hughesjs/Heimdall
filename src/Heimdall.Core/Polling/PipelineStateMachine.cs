@@ -64,8 +64,11 @@ public static class PipelineStateMachine
     }
 
     /// <summary>
-    /// Drops pipeline lines not seen this cycle, but retains failing lines so a later recovery can
-    /// still be reported even if the branch went quiet and its latest run aged off the recent-runs page.
+    /// Drops pipeline lines not seen this cycle, except failing lines, which are retained so a later
+    /// recovery can still be reported even if the branch went quiet and its latest run aged off the
+    /// recent-runs page. This pure helper has no notion of time, so failing lines are retained
+    /// indefinitely here; age-based eviction (the "retained longer, not forever" intent) is layered on
+    /// by the polling service, which owns the cycle clock.
     /// </summary>
     public static IReadOnlyDictionary<PipelineKey, PipelineState> Prune(
         IReadOnlyDictionary<PipelineKey, PipelineState> states,
