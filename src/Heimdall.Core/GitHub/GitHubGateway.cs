@@ -19,7 +19,7 @@ public sealed class GitHubGateway : IGitHubGateway
         _client = client;
         _authors = new PullRequestAuthorCache(async (owner, repo, number, _) =>
         {
-            var pr = await _client.PullRequest.Get(owner, repo, number);
+            var pr = await Guard(() => _client.PullRequest.Get(owner, repo, number));
             CaptureRateLimit();
             return pr.User?.Login;
         });
@@ -29,15 +29,15 @@ public sealed class GitHubGateway : IGitHubGateway
 
     public async Task<RepoConfig> ValidateAndDescribeAsync(string owner, string name, CancellationToken cancellationToken)
     {
-        var repo = await _client.Repository.Get(owner, name);
+        var repo = await Guard(() => _client.Repository.Get(owner, name));
         CaptureRateLimit();
         return new RepoConfig(owner, name, repo.DefaultBranch);
     }
 
     public async Task<IReadOnlyList<RunRecord>> GetRecentRunsAsync(RepoConfig repo, CancellationToken cancellationToken)
     {
-        var response = await _client.Actions.Workflows.Runs.List(
-            repo.Owner, repo.Name, new WorkflowRunsRequest(), new ApiOptions { PageSize = RecentRunsPageSize, PageCount = 1 });
+        var response = await Guard(() => _client.Actions.Workflows.Runs.List(
+            repo.Owner, repo.Name, new WorkflowRunsRequest(), new ApiOptions { PageSize = RecentRunsPageSize, PageCount = 1 }));
         CaptureRateLimit();
 
         var records = new List<RunRecord>(response.WorkflowRuns.Count);
@@ -79,5 +79,22 @@ public sealed class GitHubGateway : IGitHubGateway
         var rateLimit = _client.GetLastApiInfo()?.RateLimit;
         if (rateLimit is not null)
             LastRateLimit = new RateLimitInfo(rateLimit.Remaining, rateLimit.Limit, rateLimit.Reset);
+    }
+
+    /// <summary>Runs an Octokit call, translating auth/rate-limit failures into a domain exception.</summary>
+    private static async Task<T> Guard<T>(Func<Task<T>> call)
+    {
+        try
+        {
+            return await call();
+        }
+        catch (AuthorizationException ex)
+        {
+            throw new GitHubAccessException(GitHubAccessError.Unauthorised, ex);
+        }
+        catch (RateLimitExceededException ex)
+        {
+            throw new GitHubAccessException(GitHubAccessError.RateLimited, ex);
+        }
     }
 }
