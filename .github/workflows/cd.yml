@@ -1,0 +1,212 @@
+name: CD
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "build/**"
+      - ".github/workflows/cd.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Serialise releases so two close-together pushes can't race on creating the same tag.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Calculate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.nextStrict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate semantic version
+        id: semver
+        uses: ietf-tools/semver-action@v1.11.0
+        with:
+          token: ${{ github.token }}
+          branch: master
+          majorList: major, breaking
+          minorList: minor, feat, feature
+          patchList: fix, bugfix, perf, refactor, test, tests, chore, patch, build, ci, docs, style
+          patchAll: true
+          noVersionBumpBehavior: patch
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet test Heimdall.slnx --configuration Release
+
+  build-archives:
+    name: Build ${{ matrix.rid }}
+    needs: [version, test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-latest
+          - rid: win-x64
+            runner: windows-latest
+          - rid: win-arm64
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish self-contained single-file
+        run: >
+          dotnet publish src/Heimdall/Heimdall.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:Version=${{ needs.version.outputs.version }}
+          -o publish
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf "Heimdall-${{ matrix.rid }}-v${{ needs.version.outputs.version }}.tar.gz" -C publish Heimdall
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path publish/Heimdall.exe -DestinationPath "Heimdall-${{ matrix.rid }}-v${{ needs.version.outputs.version }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Heimdall-${{ matrix.rid }}
+          path: Heimdall-${{ matrix.rid }}-v${{ needs.version.outputs.version }}.*
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs: [version, test]
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-x64
+            arch: x64
+          - rid: osx-arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build .app bundle and .dmg
+        run: bash build/macos/make-dmg.sh ${{ matrix.rid }} ${{ needs.version.outputs.version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Heimdall-macos-${{ matrix.arch }}
+          path: Heimdall-macos-${{ matrix.arch }}-v${{ needs.version.outputs.version }}.dmg
+          if-no-files-found: error
+
+  create-tag:
+    name: Create tag
+    needs: [version, test, build-archives, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          VERSION="v${{ needs.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
+  changelog:
+    name: Generate changelog
+    needs: [version, create-tag]
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.changelog.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get previous tag
+        run: |
+          name=$(git --no-pager tag --sort=creatordate --merged "${{ github.ref_name }}" | tail -2 | head -1)
+          echo "previousTag=$name" >> "$GITHUB_ENV"
+
+      - name: Generate changelog
+        id: changelog
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ github.token }}
+          fromTag: v${{ needs.version.outputs.version }}
+          toTag: ${{ env.previousTag }}
+          writeToFile: false
+          includeInvalidCommits: true
+
+  create-release:
+    name: Create release
+    needs: [version, create-tag, changelog, build-archives, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          name: Heimdall v${{ needs.version.outputs.version }}
+          tag: v${{ needs.version.outputs.version }}
+          body: |
+            ## Heimdall v${{ needs.version.outputs.version }}
+
+            A lightweight cross-platform tray app that notifies you when *your* GitHub Actions runs fail or recover.
+
+            ### Install
+
+            **macOS** — download the `.dmg` for your chip (Apple Silicon → `arm64`, Intel → `x64`), open it, and drag **Heimdall** to Applications. It is unsigned, so the first launch needs **right-click Heimdall → Open → Open**, or run once:
+            ```
+            xattr -dr com.apple.quarantine /Applications/Heimdall.app
+            ```
+            Heimdall runs in the menu bar (no Dock icon).
+
+            **Linux** — `tar -xzf Heimdall-linux-<arch>-v${{ needs.version.outputs.version }}.tar.gz` then `./Heimdall`. GNOME needs an AppIndicator/Status-Tray extension to show the tray icon.
+
+            **Windows** — unzip and run `Heimdall.exe`.
+
+            First run prompts you to authorise via GitHub device flow, then add repos in Settings.
+
+            ## Changelog
+
+            ${{ needs.changelog.outputs.changelog }}
+          artifacts: "artifacts/*"
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
