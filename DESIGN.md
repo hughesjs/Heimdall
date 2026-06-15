@@ -1,0 +1,200 @@
+# Heimdall — Design
+
+Companion to `SPEC.md`. Records the agreed design of the five Core layers and the decisions behind them. No implementation yet — folders are scaffolded with `.gitkeep`.
+
+## Architecture at a glance
+
+```
+PeriodicTimer (~60s)
+  └─ PollingService          (Polling/)  — the spine
+       ├─ IGitHubGateway     (GitHub/)   — run listing, ETag, PR-author enrichment, rate limit
+       ├─ RelevanceEngine    (Rules/)    — OR of enabled IRelevanceRule, pure field comparisons
+       └─ state map           ─ Dictionary<PipelineKey, PipelineState>, single writer
+            └─ raises events: Transition / Aggregate / Snapshot
+```
+
+`Heimdall.Core` is Avalonia-free and raises plain events. The `Heimdall` app subscribes and marshals to the UI thread (`Dispatcher.UIThread.Post`) for the tray icon and notifications, and supplies the platform implementations of `ITokenStore` and `INotificationManager`.
+
+---
+
+## 1. State model (`Models/`, `Polling/`)
+
+Status enum — nothing above the gateway touches Octokit types:
+
+```csharp
+public enum RunStatus { Success, Failure, InProgress, Unknown }
+```
+`Unknown` covers `cancelled`, `skipped`, `neutral`, `timed_out`, etc. **Only `Success`↔`Failure` fire notifications** — `Unknown` never triggers "broke" or "recovered".
+
+```csharp
+public record RunRecord(
+    long RunId, long WorkflowId, string WorkflowName,
+    string RepoOwner, string RepoName, string HeadBranch, string Event,
+    int RunNumber, RunStatus Status, string TriggeringActorLogin,
+    IReadOnlyList<int> PullRequestNumbers,
+    IReadOnlyList<string> PullRequestAuthorLogins,   // enriched by the gateway, see §3
+    string HtmlUrl, DateTimeOffset CreatedAt);
+
+public readonly record struct PipelineKey(string Owner, string Repo, long WorkflowId, string HeadBranch);
+
+public record PipelineState(
+    PipelineKey Key,
+    RunStatus LastSettledStatus,   // comparison anchor — Success/Failure/Unknown
+    bool      InProgress,          // latest run queued/in_progress → drives amber
+    long      LastRunId,
+    RunRecord LastRun);            // notification content + tray menu
+```
+
+**Pipeline line = (repo, workflow, branch).** Per-branch, so `CI on main` and `CI on my-feature` are distinct lines.
+
+### Transition logic (per cycle, per key)
+Take the latest **relevant** run for the key (highest `RunNumber`):
+
+1. **InProgress** → set `InProgress = true`, leave the settled anchor untouched, no notification.
+2. **Settled**:
+   - **No prior state for this key** → seed `LastSettledStatus`, **no notification** (silent seed).
+   - **Prior exists, settled status changed** → fire `Success→Failure` (broke) / `Failure→Success` (recovered); update anchor + `LastRunId`.
+   - **Unchanged** → update `InProgress`/`LastRunId`, no notification.
+
+The silent-seed rule subsumes the "first poll" case — on cycle 1 every key is new, so the baseline is silent without a separate flag.
+
+### Tray aggregation
+Priority **Grey** (disconnected/error) › **Red** (any `Failure`) › **Amber** (any `InProgress`) › **Green**. Red beats Amber so a known breakage stays visible while something re-runs.
+
+---
+
+## 2. Relevance rules (`Rules/`)
+
+Rules are **pure and synchronous** — field comparisons over an already-enriched `RunRecord`. A run is relevant if **any enabled** rule returns true.
+
+```csharp
+public record Identity(string Login);                 // + IReadOnlyList<string> CommitEmails with rule 4
+public record RepoContext(string Owner, string Name, string DefaultBranch);
+
+public interface IRelevanceRule
+{
+    string Id { get; }   // stable key matching the settings toggle
+    bool IsRelevant(RunRecord run, Identity me, RepoContext repo);
+}
+```
+
+| Rule | Id | Logic | Default |
+|------|----|-------|---------|
+| Triggered by me | `TriggeredByMe` | `run.TriggeringActorLogin == me.Login` | on |
+| My pull request | `MyPullRequest` | `run.PullRequestAuthorLogins.Contains(me.Login)` | on |
+| Default branch breaking | `DefaultBranchBreaking` | `run.HeadBranch == repo.DefaultBranch` (authorship-agnostic) | **off** |
+
+Toggles stored per `Id` in `AppSettings` (`Dictionary<string,bool>` — extensible for rule 4 with no schema change). `RepoContext.DefaultBranch` comes free from the `Repository.Get` access-validation on repo-add (cache in `RepoConfig`).
+
+**Rule 4 (fast-follow):** adds `CommitEmails` to `Identity`, makes a Compare-API call for the run's push range, matches login **or** configured email against commit authors. The first inherently-async rule — hence a fast-follow, not MVP.
+
+---
+
+## 3. GitHub / ETag gateway (`GitHub/`)
+
+```csharp
+public interface IGitHubGateway
+{
+    Task<RepoContext> ValidateAndDescribeAsync(string owner, string name, CancellationToken ct);
+    Task<IReadOnlyList<RunRecord>> GetRecentRunsAsync(RepoContext repo, CancellationToken ct); // one page, per_page=50
+    RateLimitInfo? LastRateLimit { get; }
+}
+```
+
+### ETag conditional requests
+A `DelegatingHandler` sits below Octokit (inject via `Octokit.Internal.HttpClientAdapter(() => handler)` → `Connection` — **verify exact API against Octokit 14**). It keeps an in-memory map `requestUri → (etag, bufferedBody)`:
+
+- **Outgoing**: attach `If-None-Match` if an ETag is stored for the URI.
+- **200**: store ETag + buffer body, pass through.
+- **304** (no body from GitHub): **synthesise a 200** from the buffered body (re-attach the stored ETag) so Octokit deserialises normally and never sees the 304.
+
+A 304 **does not count against the 5,000/hr quota** — that's the whole point. The poll loop stays dumb: it reprocesses the (cached) runs every cycle and the idempotent state machine yields no transitions on unchanged data. The map is per-process; reset on restart feeds the silent-seed baseline.
+
+### PR-author enrichment
+The run payload's `pull_requests[]` carries **no author**, so `MyPullRequest` can't be answered from the run alone. The gateway resolves it via `PullRequest.Get`, **cached permanently by (owner, repo, PR#)** (authors are immutable) → populates `RunRecord.PullRequestAuthorLogins`. One lookup per PR ever seen; the rule stays a pure `.Contains()`.
+
+### Rate limit & auth
+- Read `GetLastApiInfo().RateLimit` each cycle; back off when `Remaining < max(100, 3×repoCount)`; honour secondary-limit `Retry-After`.
+- `401`/`AuthorizationException` (revocation) → grey tray + trip the re-auth path (§5).
+
+---
+
+## 4. Poll loop (`Polling/`)
+
+`PollingService : IAsyncDisposable`, one background `Task` driven by `PeriodicTimer.WaitForNextTickAsync`. Events: `Transition` (NotificationPayload), `Aggregate` (TrayStatus), `Snapshot` (IReadOnlyList<PipelineState>).
+
+```
+read settings fresh (repos, toggles, interval, identity)
+try:
+    latestPerKey = {}
+    foreach repo: runs = gateway.GetRecentRunsAsync(repo)
+                  relevant = runs.Where(engine.IsRelevant)        // filter BEFORE grouping
+                  keep max-RunNumber per PipelineKey
+    foreach (key, run): apply transition logic → maybe Transition
+    prune stale keys
+    raise Aggregate + Snapshot
+    check LastRateLimit → back off if low
+catch auth → Aggregate(Grey) + signal re-auth
+catch rate → Aggregate(Grey) + pause until reset
+catch     → Aggregate(Grey) + log
+```
+
+- **Relevance filtered before grouping**: relevance is per-run (spec §5), so a pipeline line is built only from relevant runs. Consequence: someone else's failing run on my branch is filtered out by `TriggeredByMe` — `DefaultBranchBreaking` is what catches breakage on `main` regardless of author. Rules compose; no special-casing.
+- **Threading**: single sequential loop ⇒ single writer on the state map, no locks in Core; immutable event payloads ⇒ race-free UI reads.
+- **Settings**: read at the top of each cycle (repo/toggle changes apply at the next boundary); interval change sets `PeriodicTimer.Period`.
+- **Pruning**: drop keys absent from a cycle's relevant set, but **retain `Failure` keys longer** than `Success`/`Unknown` so a quiet red branch can still report its eventual recovery.
+
+`NotificationPayload` (spec §6): repo, workflow, branch/PR, result, triggering actor, `HtmlUrl` — a thin projection of `RunRecord`.
+
+---
+
+## 5. Auth / device flow (`Auth/`)
+
+**Decision (amends SPEC §3): non-expiring token, no refresh.** Refresh needs `client_secret` → would break "no embedded secret / no central server". OAuth App configured with **expiring user tokens OFF**; only recovery is re-auth on 401. `client_id` is not a secret.
+
+```csharp
+public interface ITokenStore   // platform impls in the App project
+{
+    Task<string?> GetTokenAsync();
+    Task SaveTokenAsync(string token);
+    Task ClearAsync();
+}
+
+public interface IDeviceFlowAuthenticator   // raw HttpClient — Octokit can't do device flow
+{
+    Task<DeviceCodeResponse> RequestDeviceCodeAsync(CancellationToken ct);                 // POST github.com/login/device/code
+    Task<string> PollForTokenAsync(DeviceCodeResponse code, IProgress<DeviceFlowStatus> p, CancellationToken ct); // POST github.com/login/oauth/access_token
+}
+```
+
+Device-code request takes `client_id` + scopes only. The poll state machine handles `authorization_pending` (keep polling), `slow_down` (+5s interval), `expired_token` (restart), `access_denied` (cancel), success (store token).
+
+**AuthCoordinator**: `store.Get()` → if null run device flow (UI shows `user_code` + opens `verification_uri`) → build authenticated `GitHubClient` wired with the ETag handler. On gateway 401 → `store.Clear()` → raise `NeedsReauth` → re-run flow → resume polling.
+
+**Scopes**: read-only `repo` (classic) or fine-grained `contents:read, actions:read, pull_requests:read`.
+
+---
+
+## Decision log
+
+1. Pipeline line keyed **per-branch**: `(repo, workflow, branch)`.
+2. **Silent seed** on first sighting of any key (subsumes silent-first-poll).
+3. Transitions fire only between **settled** states; `Success↔Failure` only (`Unknown`/`InProgress` never notify).
+4. Rule 2 needs a **cached PR-author lookup** — cost relocated into the gateway; rule stays pure.
+5. ETag handler saves **quota only**; poll loop reprocesses idempotently (no 304 signal threaded up).
+6. Tray priority **Grey › Red › Amber › Green**.
+7. Pruning retains `Failure` keys longer than `Success`.
+8. **Non-expiring token, no refresh** (amends SPEC §3); re-auth on 401 only.
+
+---
+
+## Suggested build sequence
+
+1. **Models + state machine** (`Models/`, `Polling/` transition logic) — pure, fully unit-testable with synthetic `RunRecord`s. No GitHub yet.
+2. **Relevance rules** (`Rules/`) — pure, table-driven tests.
+3. **GitHub gateway** — run mapping + PR-author cache first; **ETag handler** second (the trickiest unit; test the 304-replay against a stub `HttpMessageHandler`).
+4. **PollingService** — wire gateway + rules + state; test with a fake gateway driving scripted run sequences through transitions.
+5. **Auth** — device-flow coordinator (raw HttpClient, testable against a stub), then platform `ITokenStore` impls.
+6. **App wiring** — TrayIcon, platform `INotificationManager`, settings UI, onboarding/device-flow UI; prune Avalonia template extras; add green/red/amber/grey tray icons.
+
+Outstanding scaffold cleanup (carried from the skeleton): prune `MainWindow`/`MainWindowViewModel`/`ViewLocator`, replace the placeholder `avalonia-logo.ico` with the four tray icons.
