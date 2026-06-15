@@ -7,6 +7,11 @@ namespace Heimdall.Core.GitHub;
 /// immutable, so each PR is fetched at most once — bounded by the number of PRs ever seen, not by
 /// poll frequency. The fetch delegate is injected so the cache is testable without GitHub.
 /// </summary>
+/// <remarks>
+/// Driven by the single-threaded poll loop, so it deliberately does not dedupe concurrent misses
+/// (two concurrent callers for an uncached PR would both fetch — harmless, as the fetch is idempotent).
+/// Null results are intentionally not cached so a PR whose author could not be resolved is retried later.
+/// </remarks>
 public sealed class PullRequestAuthorCache
 {
     private readonly Func<string, string, int, CancellationToken, Task<string?>> _fetch;
