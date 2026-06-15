@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
+  # CD owns master; CI gates pull requests.
   pull_request:
 
 jobs:
