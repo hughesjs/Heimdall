@@ -47,19 +47,19 @@ internal sealed class HeimdallOrchestrator(
         try
         {
             var token = await tokenStore.GetTokenAsync() ?? await OnboardAsync();
-            if (token is null)
-                return;
 
-            var gateway = new GitHubGateway(GitHubClientFactory.Create(token));
-            _gateway = gateway;
+            // Each session runs the poll loop against one token. A 401 cancels the session; we then
+            // re-authenticate and start a fresh session with a new gateway, rather than spinning on the
+            // revoked token (which would re-fire AuthenticationFailed every cycle).
+            while (token is not null && !_cts.IsCancellationRequested)
+            {
+                var reauthRequired = await RunSessionAsync(token);
+                if (!reauthRequired)
+                    return;
 
-            var polling = new PollingService(gateway, new RelevanceEngine(StandardRules.All));
-            polling.Aggregate += status => Dispatcher.UIThread.Post(() => SetStatus(status));
-            polling.Snapshot += pipelines => Dispatcher.UIThread.Post(() => RebuildMenu(pipelines));
-            polling.Transition += payload => Dispatcher.UIThread.Post(() => _ = notifications.ShowAsync(payload));
-            polling.AuthenticationFailed += () => Dispatcher.UIThread.Post(() => _ = ReauthenticateAsync());
-
-            await polling.RunAsync(settingsStore, _cts.Token);
+                await tokenStore.ClearAsync();
+                token = await OnboardAsync();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -67,21 +67,50 @@ internal sealed class HeimdallOrchestrator(
         }
     }
 
+    /// <summary>Runs one polling session against <paramref name="token"/>. Returns true if it stopped because re-auth is needed.</summary>
+    private async Task<bool> RunSessionAsync(string token)
+    {
+        using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        var reauthRequired = false;
+
+        var gateway = new GitHubGateway(GitHubClientFactory.Create(token));
+        _gateway = gateway;
+
+        var polling = new PollingService(gateway, new RelevanceEngine(StandardRules.All));
+        polling.Aggregate += status => Dispatcher.UIThread.Post(() => SetStatus(status));
+        polling.Snapshot += pipelines => Dispatcher.UIThread.Post(() => RebuildMenu(pipelines));
+        polling.Transition += payload => Dispatcher.UIThread.Post(() => _ = notifications.ShowAsync(payload));
+        polling.AuthenticationFailed += () =>
+        {
+            reauthRequired = true;
+            sessionCts.Cancel(); // stop this session; RunAsync re-auths and starts a fresh one
+        };
+
+        try
+        {
+            await polling.RunAsync(settingsStore, sessionCts.Token);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            // Cancelled to re-authenticate, not to shut down.
+        }
+
+        return reauthRequired && !_cts.IsCancellationRequested;
+    }
+
     private async Task<string?> OnboardAsync()
     {
         var viewModel = new DeviceFlowViewModel(authCoordinator);
         var window = new DeviceFlowWindow { DataContext = viewModel };
-        window.Show();
-        var token = await viewModel.AuthenticateAsync(_cts.Token);
-        window.Close();
-        return token;
-    }
-
-    private async Task ReauthenticateAsync()
-    {
-        var token = await authCoordinator.ReauthenticateAsync(_ => Task.CompletedTask, _cts.Token).ConfigureAwait(true);
-        if (!string.IsNullOrEmpty(token))
-            _gateway = new GitHubGateway(GitHubClientFactory.Create(token));
+        try
+        {
+            window.Show();
+            return await viewModel.AuthenticateAsync(_cts.Token);
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     private void SetStatus(TrayStatus status)

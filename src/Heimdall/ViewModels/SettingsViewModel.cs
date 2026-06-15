@@ -99,7 +99,14 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
 
     public async Task SaveAsync(CancellationToken cancellationToken)
     {
-        await store.SaveAsync(BuildSettings(), cancellationToken);
-        StatusMessage = "Saved.";
+        try
+        {
+            await store.SaveAsync(BuildSettings(), cancellationToken);
+            StatusMessage = "Saved.";
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Could not save: {exception.Message}";
+        }
     }
 }
