@@ -24,7 +24,7 @@ jobs:
     outputs:
       version: ${{ steps.semver.outputs.nextStrict }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -48,8 +48,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
       - run: dotnet test Heimdall.slnx --configuration Release
@@ -71,8 +71,8 @@ jobs:
           - rid: win-arm64
             runner: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -92,7 +92,7 @@ jobs:
         if: runner.os == 'Windows'
         run: Compress-Archive -Path publish/Heimdall.exe -DestinationPath "Heimdall-${{ matrix.rid }}-v${{ needs.version.outputs.version }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Heimdall-${{ matrix.rid }}
           path: Heimdall-${{ matrix.rid }}-v${{ needs.version.outputs.version }}.*
@@ -111,15 +111,15 @@ jobs:
           - rid: osx-arm64
             arch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Build .app bundle and .dmg
         run: bash build/macos/make-dmg.sh ${{ matrix.rid }} ${{ needs.version.outputs.version }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Heimdall-macos-${{ matrix.arch }}
           path: Heimdall-macos-${{ matrix.arch }}-v${{ needs.version.outputs.version }}.dmg
@@ -130,7 +130,7 @@ jobs:
     needs: [version, test, build-archives, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -149,7 +149,7 @@ jobs:
     outputs:
       changelog: ${{ steps.changelog.outputs.changes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
