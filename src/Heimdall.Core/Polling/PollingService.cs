@@ -45,14 +45,15 @@ public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engin
         {
             await PollOnceAsync(settings, cancellationToken);
 
-            if (RateLimitPolicy.ShouldBackOff(_gateway.LastRateLimit, settings.Repos.Count) && _gateway.LastRateLimit is { } limit)
-                await DelayUntilAsync(limit.ResetsAt, cancellationToken);
-
-            if (!await timer.WaitForNextTickAsync(cancellationToken))
-                break;
-
+            // Re-read settings and set the period before waiting, so an interval change applies at the next boundary.
             settings = await settingsStore.LoadAsync(cancellationToken);
             timer.Period = IntervalOf(settings);
+
+            // When quota is low, wait until it resets *instead of* the normal cadence (not in addition to it).
+            if (RateLimitPolicy.ShouldBackOff(_gateway.LastRateLimit, settings.Repos.Count) && _gateway.LastRateLimit is { } limit)
+                await DelayUntilAsync(limit.ResetsAt, cancellationToken);
+            else if (!await timer.WaitForNextTickAsync(cancellationToken))
+                break;
         }
     }
 
@@ -91,6 +92,11 @@ public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engin
         {
             Aggregate?.Invoke(TrayStatus.Grey);
             AuthenticationFailed?.Invoke();
+        }
+        catch (GitHubAccessException ex) when (ex.Error == GitHubAccessError.RateLimited)
+        {
+            // Expected when quota is exhausted: grey the tray and let RunAsync's backoff wait it out.
+            Aggregate?.Invoke(TrayStatus.Grey);
         }
         catch (Exception ex)
         {

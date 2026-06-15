@@ -65,4 +65,22 @@ public class JsonSettingsStoreTests
                 Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task Save_overwrites_existing_settings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"heimdall-overwrite-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new JsonSettingsStore(path);
+            await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 10 }, default);
+            await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 99 }, default);
+
+            (await store.LoadAsync(default)).PollIntervalSeconds.ShouldBe(99);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

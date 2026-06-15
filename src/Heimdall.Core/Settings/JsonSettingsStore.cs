@@ -34,8 +34,17 @@ public sealed class JsonSettingsStore : ISettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        await using var stream = File.Create(_path);
-        await JsonSerializer.SerializeAsync(stream, settings, Options, cancellationToken);
+        var directory = Path.GetDirectoryName(_path)!;
+        Directory.CreateDirectory(directory);
+
+        // Write to a temp file then move it into place, so a crash mid-write can't corrupt the
+        // existing settings (which would silently reset the user's repo list to defaults).
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
+        await using (var stream = File.Create(tempPath))
+        {
+            await JsonSerializer.SerializeAsync(stream, settings, Options, cancellationToken);
+        }
+
+        File.Move(tempPath, _path, overwrite: true);
     }
 }
