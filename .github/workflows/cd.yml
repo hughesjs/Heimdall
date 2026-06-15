@@ -12,6 +12,11 @@ on:
 permissions:
   contents: write
 
+# Serialise releases so two close-together pushes can't race on creating the same tag.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   version:
     name: Calculate version
