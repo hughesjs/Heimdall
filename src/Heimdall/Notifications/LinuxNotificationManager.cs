@@ -15,7 +15,7 @@ internal sealed class LinuxNotificationManager : INotificationManager
     public Task ShowAsync(NotificationPayload payload)
     {
         var (title, body) = NotificationContent.Format(payload);
-        var icon = payload.Kind == TransitionKind.Broke ? "dialog-error" : "dialog-information";
+        var icon = payload.Kind == NotificationKind.Broke ? "dialog-error" : "dialog-information";
         Shell.TryStart("notify-send", "--app-name=Heimdall", $"--icon={icon}", title, body);
         return Task.CompletedTask;
     }

@@ -34,6 +34,7 @@ Identity config: GitHub login (MVP). Commit author email(s) added with rule 4 in
 ## 6. Notification behaviour
 - **Fire only on state transition**: green→red (broke) and red→green (recovered). No repeat notifications for unchanged status.
 - Per-relevant-pipeline state tracked locally to detect transitions.
+- **Release announcements.** Each repo may designate **announce workflows** (by name). Independently of the green↔red transition rules, a *new settled run* of an announce workflow notifies: **success → "shipped"** always; **failure → "broke"** only if the repo's *announce failures* option is on. Announcements are deduped per run (each run notifies at most once) and are **silent on first sighting / restart** (a pre-existing successful release is not re-announced). Announce workflows are notification-only: an announce-only pipeline does **not** affect the tray colour. Matching is by workflow name (case-insensitive), authorship-agnostic.
 - Notification content: repo, workflow name, branch/PR, result, who triggered. **Click → open the run in the browser.**
 - Notifications via `INotificationManager` (platform implementations: WinRT Toast on Windows, `UNUserNotificationCenter` on macOS, D-Bus `org.freedesktop.Notifications` on Linux).
 
@@ -47,7 +48,7 @@ Identity config: GitHub login (MVP). Commit author email(s) added with rule 4 in
 - Tray icon via Avalonia's built-in `TrayIcon`. Note: GNOME does not support `StatusNotifierItem` without a user-installed extension (AppIndicator/Status Tray) — document for Linux users.
 
 ## 8. Settings
-Auth status, repo list, identity (login; +emails with rule 4), relevance toggles, poll interval, launch-on-login (optional), notification on/off.
+Auth status, repo list, identity (login; +emails with rule 4), relevance toggles, poll interval, launch-on-login (optional), notification on/off. Per repo: **announce workflows** (comma-separated workflow names) and an **announce failures** toggle (notify on failing announce-workflow runs too, not just successes).
 
 - Settings persisted as JSON via `ISettingsStore` in Core, using `Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)` for cross-platform path resolution (`%APPDATA%` / `~/Library/Application Support` / `~/.config`).
 

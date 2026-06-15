@@ -21,7 +21,7 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         [DefaultBranchBreakingRule.RuleId] = "Default branch breaking"
     };
 
-    public ObservableCollection<RepoConfig> Repos { get; } = [];
+    public ObservableCollection<RepoEntryViewModel> Repos { get; } = [];
     public ObservableCollection<RuleToggle> Rules { get; } = [];
 
     [ObservableProperty]
@@ -49,7 +49,7 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
 
         Repos.Clear();
         foreach (var repo in settings.Repos)
-            Repos.Add(repo);
+            Repos.Add(new RepoEntryViewModel(repo));
 
         Rules.Clear();
         foreach (var (ruleId, enabled) in settings.RuleToggles)
@@ -75,7 +75,7 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         try
         {
             var repo = await gateway.ValidateAndDescribeAsync(parts[0], parts[1], cancellationToken);
-            Repos.Add(repo);
+            Repos.Add(new RepoEntryViewModel(repo));
             NewRepo = string.Empty;
             StatusMessage = $"Added {repo.Owner}/{repo.Name}.";
             return true;
@@ -87,11 +87,11 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         }
     }
 
-    public void RemoveRepo(RepoConfig repo) => Repos.Remove(repo);
+    public void RemoveRepo(RepoEntryViewModel repo) => Repos.Remove(repo);
 
     /// <summary>Projects the current edits into an <see cref="AppSettings"/>.</summary>
     public AppSettings BuildSettings() => new(
-        Repos: [.. Repos],
+        Repos: [.. Repos.Select(repo => repo.ToRepoConfig())],
         Identity: new Identity(Login),
         RuleToggles: Rules.ToDictionary(rule => rule.RuleId, rule => rule.Enabled),
         PollIntervalSeconds: PollIntervalSeconds,

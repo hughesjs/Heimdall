@@ -35,7 +35,7 @@ public class PipelineTransitionTests
         var (next, note) = PipelineStateMachine.Apply(seeded, Run(RunStatus.Failure, runId: 2, runNumber: 2));
 
         note.ShouldNotBeNull();
-        note.Kind.ShouldBe(TransitionKind.Broke);
+        note.Kind.ShouldBe(NotificationKind.Broke);
         note.Run.RunId.ShouldBe(2L);
         next.LastSettledStatus.ShouldBe(RunStatus.Failure);
     }
@@ -47,7 +47,7 @@ public class PipelineTransitionTests
         var (next, note) = PipelineStateMachine.Apply(seeded, Run(RunStatus.Success, runId: 2, runNumber: 2));
 
         note.ShouldNotBeNull();
-        note.Kind.ShouldBe(TransitionKind.Recovered);
+        note.Kind.ShouldBe(NotificationKind.Recovered);
         next.LastSettledStatus.ShouldBe(RunStatus.Success);
     }
 
@@ -81,7 +81,7 @@ public class PipelineTransitionTests
         var (settled, note) = PipelineStateMachine.Apply(running, Run(RunStatus.Failure, runId: 2, runNumber: 2));
 
         note.ShouldNotBeNull();
-        note.Kind.ShouldBe(TransitionKind.Broke);
+        note.Kind.ShouldBe(NotificationKind.Broke);
         settled.InProgress.ShouldBeFalse();
     }
 
@@ -95,7 +95,7 @@ public class PipelineTransitionTests
 
         var (recovered, n2) = PipelineStateMachine.Apply(afterCancelled, Run(RunStatus.Success, runId: 3, runNumber: 3));
         n2.ShouldNotBeNull();
-        n2.Kind.ShouldBe(TransitionKind.Recovered);
+        n2.Kind.ShouldBe(NotificationKind.Recovered);
     }
 
     [Fact]

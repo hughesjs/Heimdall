@@ -68,20 +68,25 @@ public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engin
             foreach (var repo in settings.Repos)
             {
                 var runs = await _gateway.GetRecentRunsAsync(repo, cancellationToken);
-                foreach (var run in LatestRelevantPerKey(runs, settings.Identity, repo, enabledRules))
+                foreach (var run in LatestTrackedPerKey(runs, settings.Identity, repo, enabledRules))
                 {
                     var key = PipelineKey.For(run);
                     seen.Add(key);
                     _states.TryGetValue(key, out var prior);
-                    var (state, notification) = PipelineStateMachine.Apply(prior, run);
-                    _states[key] = state;
+
+                    var isAnnounce = repo.AnnounceWorkflows.Contains(run.WorkflowName, StringComparer.OrdinalIgnoreCase);
+                    var isRelevant = _engine.IsRelevant(run, settings.Identity, repo, enabledRules);
+                    var policy = isAnnounce ? NotifyPolicy.Announce : NotifyPolicy.Transitions;
+
+                    var (state, notification) = PipelineStateMachine.Apply(prior, run, policy, repo.AnnounceFailures);
+                    _states[key] = state with { CountsTowardTray = isRelevant };
                     if (notification is not null && settings.NotificationsEnabled)
                         Transition?.Invoke(notification);
                 }
             }
 
             _states = new Dictionary<PipelineKey, PipelineState>(PipelineStateMachine.Prune(_states, seen));
-            Aggregate?.Invoke(PipelineStateMachine.Aggregate(_states.Values, connected: true));
+            Aggregate?.Invoke(PipelineStateMachine.Aggregate(_states.Values.Where(s => s.CountsTowardTray), connected: true));
             Snapshot?.Invoke(_states.Values.ToList());
         }
         catch (OperationCanceledException)
@@ -106,9 +111,11 @@ public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engin
         }
     }
 
-    private IEnumerable<RunRecord> LatestRelevantPerKey(IReadOnlyList<RunRecord> runs, Identity me, RepoConfig repo, IReadOnlySet<string> enabledRules) =>
+    // Track a run if it is relevant under the rules, or its workflow is an announce workflow for the repo.
+    private IEnumerable<RunRecord> LatestTrackedPerKey(IReadOnlyList<RunRecord> runs, Identity me, RepoConfig repo, IReadOnlySet<string> enabledRules) =>
         runs
-            .Where(run => _engine.IsRelevant(run, me, repo, enabledRules))
+            .Where(run => _engine.IsRelevant(run, me, repo, enabledRules)
+                || repo.AnnounceWorkflows.Contains(run.WorkflowName, StringComparer.OrdinalIgnoreCase))
             .GroupBy(PipelineKey.For)
             .Select(group => group.MaxBy(run => run.RunNumber)!);
 
