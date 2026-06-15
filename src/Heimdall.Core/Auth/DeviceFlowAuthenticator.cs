@@ -65,8 +65,8 @@ public sealed class DeviceFlowAuthenticator : IDeviceFlowAuthenticator
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
             var root = json.RootElement;
 
-            if (root.TryGetProperty("access_token", out var accessToken))
-                return accessToken.GetString()!;
+            if (root.TryGetProperty("access_token", out var accessToken) && accessToken.GetString() is { } token)
+                return token;
 
             var error = root.TryGetProperty("error", out var errorElement) ? errorElement.GetString() : null;
             switch (error)

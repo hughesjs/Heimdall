@@ -163,13 +163,13 @@ public interface ITokenStore   // platform impls in the App project
 public interface IDeviceFlowAuthenticator   // raw HttpClient — Octokit can't do device flow
 {
     Task<DeviceCodeResponse> RequestDeviceCodeAsync(CancellationToken ct);                 // POST github.com/login/device/code
-    Task<string> PollForTokenAsync(DeviceCodeResponse code, IProgress<DeviceFlowStatus> p, CancellationToken ct); // POST github.com/login/oauth/access_token
+    Task<string> PollForTokenAsync(DeviceCodeResponse code, CancellationToken ct);         // POST github.com/login/oauth/access_token
 }
 ```
 
-Device-code request takes `client_id` + scopes only. The poll state machine handles `authorization_pending` (keep polling), `slow_down` (+5s interval), `expired_token` (restart), `access_denied` (cancel), success (store token).
+The device-code request takes `client_id` + scopes only. `PollForTokenAsync` owns the poll loop and an injectable delay; it handles `authorization_pending` (keep polling), `slow_down` (honour the new interval, else +5s), `expired_token`/`access_denied` (throw `DeviceFlowException`), and success (return the token). The user code is surfaced to the UI by `AuthCoordinator` (via an `onCodeReady` callback) *before* polling begins, so no intermediate `IProgress` reporter is needed.
 
-**AuthCoordinator**: `store.Get()` → if null run device flow (UI shows `user_code` + opens `verification_uri`) → build authenticated `GitHubClient` wired with the ETag handler. On gateway 401 → `store.Clear()` → raise `NeedsReauth` → re-run flow → resume polling.
+**AuthCoordinator**: `GetOrAuthenticate` → stored token short-circuits the flow; otherwise `RequestDeviceCode` → `onCodeReady(code)` (UI shows `user_code` + opens `verification_uri`) → `PollForToken` → store token. `Reauthenticate` clears then re-runs the flow (the gateway-401 recovery path).
 
 **Scopes**: read-only `repo` (classic) or fine-grained `contents:read, actions:read, pull_requests:read`.
 

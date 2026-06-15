@@ -26,9 +26,10 @@ internal static class ProcessRunner
             process.StandardInput.Close();
         }
 
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        return (process.ExitCode, stdout, stderr);
+        // Read both streams concurrently so a child filling its stderr buffer can't deadlock the read.
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
+        return (process.ExitCode, await stdoutTask, await stderrTask);
     }
 }

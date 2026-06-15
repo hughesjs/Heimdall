@@ -16,6 +16,10 @@ public sealed class MacosTokenStore(string service = "heimdall", string account 
     public async Task SaveTokenAsync(string token)
     {
         // -U updates the item if it already exists rather than failing.
+        // Known limitation: `security` takes the secret as an argv element (-w <token>), so it is briefly
+        // visible to other same-user processes via `ps` during this call. add-generic-password has no
+        // non-interactive stdin path, so this is accepted for a local single-user app. Windows (DPAPI) and
+        // Linux (secret-tool via stdin) do not have this exposure.
         var (exitCode, _, stderr) = await ProcessRunner.RunAsync(
             "security", ["add-generic-password", "-a", account, "-s", service, "-w", token, "-U"]);
         if (exitCode != 0)
