@@ -197,6 +197,20 @@ public class PollingServiceTests
     }
 
     [Fact]
+    public async Task Pipeline_that_is_both_relevant_and_announce_still_counts_toward_the_tray()
+    {
+        // A failing run I triggered on an announce workflow is still "mine" — the tray reddens (CountsTowardTray stays true).
+        var gateway = new FakeGitHubGateway { OnGetRuns = _ => [Run(RunStatus.Failure, workflow: "CD", actor: "alice")] };
+        var service = NewService(gateway);
+        TrayStatus? last = null;
+        service.Aggregate += status => last = status;
+
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default);
+
+        last.ShouldBe(TrayStatus.Red);
+    }
+
+    [Fact]
     public async Task Announce_only_pipeline_still_appears_in_the_snapshot()
     {
         var gateway = new FakeGitHubGateway { OnGetRuns = _ => [Run(RunStatus.Success, workflow: "CD", actor: "bob")] };
