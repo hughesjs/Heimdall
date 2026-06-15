@@ -198,3 +198,22 @@ Device-code request takes `client_id` + scopes only. The poll state machine hand
 6. **App wiring** — TrayIcon, platform `INotificationManager`, settings UI, onboarding/device-flow UI; prune Avalonia template extras; add green/red/amber/grey tray icons.
 
 Outstanding scaffold cleanup (carried from the skeleton): prune `MainWindow`/`MainWindowViewModel`/`ViewLocator`, replace the placeholder `avalonia-logo.ico` with the four tray icons.
+
+---
+
+## Testing strategy
+
+**Rule of thumb: if it's worth testing, it lives in Core or a ViewModel — never in a view.** This keeps pressure on the architecture to push logic out of the UI.
+
+### For now (build-sequence steps 1–4) — Core unit tests only
+Everything in this stretch is pure logic. Keep `Heimdall.Tests` Avalonia-free (xunit 2.9.3 + Shouldly, references Core only). **Do not stand up a UI test project yet** — there are no views to assert on.
+
+- **State machine** — table-driven over the transition cases: silent-seed on first sighting; `Success→Failure` fires; `Failure→Success` fires; `Unknown`/`InProgress` never fire; in-progress holds the settled anchor. Synthetic `RunRecord`s, no I/O.
+- **Rules** — table-driven `IsRelevant` per rule + OR composition + toggle on/off.
+- **Gateway** — the fiddly unit is the **ETag handler**: test the 304-replay against a stub `HttpMessageHandler` (200 stores+buffers; 304 → synthesised 200 with the buffered body). Plus the PR-author cache (one lookup per PR, cache hit thereafter).
+- **PollingService** — drive a **fake `IGitHubGateway`** through scripted run sequences; assert emitted `Transition`/`Aggregate`/`Snapshot` events.
+
+### Later (step 6, app wiring)
+- **ViewModel POCO tests first** — VMs are plain `CommunityToolkit.Mvvm` objects (settings logic, device-flow VM state `pending → code shown → authorised`, command enablement). No headless needed.
+- **`Avalonia.Headless.XUnit` (`[AvaloniaFact]`) — sparingly**, only for genuine view concerns a VM can't express (bindings resolve, device-flow view surfaces the `user_code`, command wiring). Needs a **separate** `Heimdall.UiTests` project (references the app, `[assembly: AvaloniaTestApplication(...)]` + headless `AppBuilder`) — match the package to Avalonia 12.0.4. Defer until a view actually warrants it.
+- **Platform seams not unit-testable** — `TrayIcon`, `INotificationManager`, `ITokenStore` are platform-native. Verify via manual per-platform smoke tests or a small console harness. **Appium end-to-end: skip for MVP.**
