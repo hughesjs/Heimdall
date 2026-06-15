@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Heimdall.Core/Heimdall.Core.csproj" />
     <Project Path="src/Heimdall.Tests/Heimdall.Tests.csproj" />
+    <Project Path="src/Heimdall.UiTests/Heimdall.UiTests.csproj" />
     <Project Path="src/Heimdall/Heimdall.csproj" />
   </Folder>
 </Solution>

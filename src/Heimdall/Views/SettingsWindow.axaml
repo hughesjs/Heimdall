@@ -1,0 +1,54 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Heimdall.ViewModels"
+        xmlns:models="using:Heimdall.Core.Models"
+        x:Class="Heimdall.Views.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Width="520" Height="640"
+        Title="Heimdall Settings"
+        WindowStartupLocation="CenterScreen">
+    <ScrollViewer>
+        <StackPanel Margin="20" Spacing="16">
+
+            <TextBlock Text="Identity" FontWeight="SemiBold" />
+            <TextBox PlaceholderText="GitHub login" Text="{Binding Login}" />
+
+            <TextBlock Text="Repositories" FontWeight="SemiBold" />
+            <ListBox ItemsSource="{Binding Repos}" MaxHeight="160">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:RepoConfig">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Owner}" />
+                                <TextBlock Text="/" />
+                                <TextBlock Text="{Binding Name}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Remove" Click="RemoveRepo" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBox Width="340" PlaceholderText="owner/repo" Text="{Binding NewRepo}" />
+                <Button Content="Add" Click="AddRepo" />
+            </StackPanel>
+
+            <TextBlock Text="Relevance rules" FontWeight="SemiBold" />
+            <ItemsControl ItemsSource="{Binding Rules}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:RuleToggle">
+                        <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding Enabled}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Text="Polling interval (seconds)" FontWeight="SemiBold" />
+            <NumericUpDown Minimum="10" Maximum="3600" Increment="10" Value="{Binding PollIntervalSeconds}" />
+
+            <CheckBox Content="Show notifications" IsChecked="{Binding NotificationsEnabled}" />
+
+            <TextBlock Text="{Binding StatusMessage}" Foreground="Gray" TextWrapping="Wrap" />
+            <Button Content="Save" Click="Save" HorizontalAlignment="Right" />
+        </StackPanel>
+    </ScrollViewer>
+</Window>

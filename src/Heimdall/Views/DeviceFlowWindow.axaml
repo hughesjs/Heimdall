@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Heimdall.ViewModels"
+        x:Class="Heimdall.Views.DeviceFlowWindow"
+        x:DataType="vm:DeviceFlowViewModel"
+        Width="440" Height="260"
+        Title="Connect Heimdall to GitHub"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False">
+    <StackPanel Margin="24" Spacing="14">
+        <TextBlock Text="Connect Heimdall to GitHub" FontSize="18" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" />
+        <Border Background="#22808080" CornerRadius="6" Padding="12" HorizontalAlignment="Center">
+            <TextBlock Text="{Binding UserCode}" FontSize="30" FontFamily="Consolas,Menlo,monospace" />
+        </Border>
+        <Button Content="Open verification page" Click="OpenPage" HorizontalAlignment="Center" />
+    </StackPanel>
+</Window>
