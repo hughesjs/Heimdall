@@ -11,16 +11,16 @@
 
 A cross-platform tray app that notifies a developer when the GitHub Actions runs relevant to them fail or recover, instead of having to watch every pipeline.
 
-Built with C#/.NET 10 and [Avalonia](https://avaloniaui.net/). It is a per-developer install that polls the GitHub REST API directly — there is no central server. See [`SPEC.md`](SPEC.md) and [`DESIGN.md`](DESIGN.md) for the full design.
+Built with C#/.NET 10 and [Avalonia](https://avaloniaui.net/). It is a per-developer install that polls the GitHub REST API directly, so there is no central server. See [`SPEC.md`](SPEC.md) and [`DESIGN.md`](DESIGN.md) for the full design.
 
 ## Features
 
-- Relevance rules — notifies on runs you triggered, PRs you opened, and (optionally) any breakage of the default branch. Each rule is toggleable.
-- Transition-only notifications — fires on green-to-red and red-to-green, not on unchanged status.
-- Release announcements — designate workflows whose new successful runs notify ("shipped"), with an optional alert on failed runs.
-- Tray indicator — aggregates your pipelines as green (all good), red (something of yours is broken), amber (a relevant run is in progress), or grey (not connected). Clicking a pipeline opens the run.
-- GitHub OAuth device flow for authentication; the token is stored in the OS keychain.
-- Conditional ETag requests and rate-limit back-off to stay within quota.
+- Notifies on runs you triggered, PRs you opened, and (optionally) any breakage of the default branch. Each rule can be turned off.
+- Fires on state changes, green to red and red to green, rather than repeatedly while the status stays the same.
+- Lets you mark a workflow, such as your CD pipeline, so its successful runs tell you a release shipped. You can also opt in to alerts when one of those runs fails.
+- Shows a tray icon that sums up your pipelines: green when all is well, red when something of yours is broken, amber when a relevant run is in progress, and grey when it is not connected. Clicking a pipeline opens the run.
+- Authenticates with the GitHub OAuth device flow and keeps the token in the OS keychain.
+- Uses conditional ETag requests and backs off when the rate limit runs low.
 
 ## Install
 
@@ -73,19 +73,19 @@ A run is relevant if any enabled rule matches:
 
 ### Release announcements
 
-Per repository, the Settings window lists the repo's workflows (fetched from GitHub); tick the ones to treat as announce workflows. Independently of the relevance rules, a new successful run of an announce workflow produces a notification ("`repo`: `workflow` shipped"). Enabling "Notify on failures too" also reports failed runs of those workflows. Announcements are deduplicated per run, silent on first sighting and after a restart (so a pre-existing release is not re-announced), and notification-only: an announce-only pipeline does not affect the tray colour. Matching is by workflow name, case-insensitive, regardless of who triggered the run.
+Per repository, the Settings window lists the repo's workflows (fetched from GitHub); tick the ones to treat as announce workflows. Apart from the relevance rules, a new successful run of an announce workflow produces a notification ("`repo`: `workflow` shipped"). Enabling "Notify on failures too" also reports failed runs of those workflows. Announcements are deduplicated per run, stay silent on first sighting and after a restart (so a pre-existing release is not re-announced), and never change the tray colour on their own. Matching is by workflow name, case-insensitive, regardless of who triggered the run.
 
 ### Other settings
 
-- Poll interval — how often Heimdall checks GitHub (default 60 seconds). Conditional requests keep unchanged data cheap against the rate limit.
-- Notifications — a master toggle for desktop notifications. The tray still updates when it is off.
-- Send test notification — fires a sample notification to confirm the platform notifier works.
+- Poll interval: how often Heimdall checks GitHub (default 60 seconds). Conditional requests keep unchanged data cheap against the rate limit.
+- Notifications: a master toggle for desktop notifications. The tray still updates when it is off.
+- Send test notification: fires a sample notification to confirm the platform notifier works.
 
 ## How it works
 
-Heimdall tracks each pipeline line — a `(repo, workflow, branch)` triple — and remembers its last settled status. Each poll it fetches recent runs, keeps the ones relevant to you plus any announce-workflow runs, and compares the latest run per line against the remembered state: a settled green-to-red flip notifies as broke, red-to-green as recovered, and a new success on an announce workflow as shipped. In-progress and cancelled/skipped runs do not produce notifications.
+Heimdall tracks each pipeline line, meaning one `(repo, workflow, branch)` combination, and remembers its last settled status. On each poll it fetches recent runs and keeps the ones relevant to you, plus any announce-workflow runs. It then compares the latest run per line against the remembered status. A settled green-to-red flip notifies as broke, red-to-green as recovered, and a new success on an announce workflow as shipped. In-progress and cancelled or skipped runs do not produce notifications.
 
-The tray icon aggregates your relevant pipelines with priority grey, red, amber, green, so a known breakage stays visible while something re-runs. There is no central server and no telemetry; Heimdall talks only to GitHub, read-only.
+The tray icon sums up your relevant pipelines in priority order: grey, then red, then amber, then green, so a known breakage stays visible while something re-runs. There is no central server and no telemetry; Heimdall talks only to GitHub, read-only.
 
 ## Building from source
 
