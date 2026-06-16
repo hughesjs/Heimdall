@@ -48,7 +48,7 @@ Identity config: GitHub login (MVP). Commit author email(s) added with rule 4 in
 - Tray icon via Avalonia's built-in `TrayIcon`. Note: GNOME does not support `StatusNotifierItem` without a user-installed extension (AppIndicator/Status Tray) — document for Linux users.
 
 ## 8. Settings
-Auth status, repo list, identity (login; +emails with rule 4), relevance toggles, poll interval, launch-on-login (optional), notification on/off. Per repo: **announce workflows** (comma-separated workflow names) and an **announce failures** toggle (notify on failing announce-workflow runs too, not just successes).
+Auth status, repo list, identity (login; +emails with rule 4), relevance toggles, poll interval, launch-on-login (optional), notification on/off. Per repo: **announce workflows** (ticked from the repo's workflows, listed from GitHub) and an **announce failures** toggle (notify on failing announce-workflow runs too, not just successes).
 
 - Settings persisted as JSON via `ISettingsStore` in Core, using `Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)` for cross-platform path resolution (`%APPDATA%` / `~/Library/Application Support` / `~/.config`).
 

@@ -25,7 +25,14 @@
                                 </StackPanel>
                                 <Button Grid.Column="1" Content="Remove" Click="RemoveRepo" />
                             </Grid>
-                            <TextBox PlaceholderText="Announce workflows (comma-separated)" Text="{Binding AnnounceWorkflowsText}" />
+                            <TextBlock Text="Announce workflows" Foreground="Gray" FontSize="11" />
+                            <ItemsControl ItemsSource="{Binding Workflows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WorkflowToggle">
+                                        <CheckBox Content="{Binding Name}" IsChecked="{Binding IsAnnounce}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                             <CheckBox Content="Notify on failures too" IsChecked="{Binding AnnounceFailures}" />
                         </StackPanel>
                     </DataTemplate>

@@ -15,6 +15,9 @@ public interface IGitHubGateway
     /// <summary>Returns the most recent page of runs for a repo, newest first.</summary>
     Task<IReadOnlyList<RunRecord>> GetRecentRunsAsync(RepoConfig repo, CancellationToken cancellationToken);
 
+    /// <summary>Lists the repo's workflow names (for choosing announce workflows in settings).</summary>
+    Task<IReadOnlyList<string>> GetWorkflowNamesAsync(RepoConfig repo, CancellationToken cancellationToken);
+
     /// <summary>The rate limit reported by the most recent API call, if any.</summary>
     RateLimitInfo? LastRateLimit { get; }
 }
