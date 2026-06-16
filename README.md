@@ -73,7 +73,7 @@ A run is relevant if any enabled rule matches:
 
 ### Release announcements
 
-Per repository, list one or more workflow names to treat as announce workflows. Independently of the relevance rules, a new successful run of an announce workflow produces a notification ("`repo`: `workflow` shipped"). Enabling "Notify on failures too" also reports failed runs of those workflows. Announcements are deduplicated per run, silent on first sighting and after a restart (so a pre-existing release is not re-announced), and notification-only: an announce-only pipeline does not affect the tray colour. Matching is by workflow name, case-insensitive, regardless of who triggered the run.
+Per repository, the Settings window lists the repo's workflows (fetched from GitHub); tick the ones to treat as announce workflows. Independently of the relevance rules, a new successful run of an announce workflow produces a notification ("`repo`: `workflow` shipped"). Enabling "Notify on failures too" also reports failed runs of those workflows. Announcements are deduplicated per run, silent on first sighting and after a restart (so a pre-existing release is not re-announced), and notification-only: an announce-only pipeline does not affect the tray colour. Matching is by workflow name, case-insensitive, regardless of who triggered the run.
 
 ### Other settings
 

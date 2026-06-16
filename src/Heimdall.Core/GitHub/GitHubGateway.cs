@@ -46,6 +46,18 @@ public sealed class GitHubGateway : IGitHubGateway
         return records;
     }
 
+    public async Task<IReadOnlyList<string>> GetWorkflowNamesAsync(RepoConfig repo, CancellationToken cancellationToken)
+    {
+        var response = await Guard(() => _client.Actions.Workflows.List(repo.Owner, repo.Name));
+        CaptureRateLimit();
+        return response.Workflows
+            .Where(workflow => workflow.DeletedAt is null)
+            .Select(workflow => workflow.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private async Task<RunRecord> MapAsync(WorkflowRun run, RepoConfig repo, CancellationToken cancellationToken)
     {
         var prNumbers = run.PullRequests?.Select(pr => pr.Number).ToList() ?? [];

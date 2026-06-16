@@ -89,4 +89,23 @@ public class SettingsViewModelTests
         notifications.Shown.ShouldHaveSingleItem().Title.ShouldBe("Heimdall");
         viewModel.StatusMessage.ShouldBe("Test notification sent.");
     }
+
+    [Fact]
+    public async Task Load_builds_announce_toggles_from_the_repos_workflows()
+    {
+        var settings = new AppSettings(
+            [new RepoConfig("octo", "demo", "main") { AnnounceWorkflows = ["CD"] }],
+            new Identity("alice"),
+            new Dictionary<string, bool>(),
+            PollIntervalSeconds: 60,
+            NotificationsEnabled: true);
+        var gateway = new FakeGitHubGateway { OnGetWorkflows = _ => ["CI", "CD"] };
+        var viewModel = new SettingsViewModel(new FakeSettingsStore(settings), gateway, new FakeNotificationManager());
+
+        await viewModel.LoadAsync(default);
+
+        var entry = viewModel.Repos.ShouldHaveSingleItem();
+        entry.Workflows.Select(workflow => workflow.Name).ShouldBe(["CD", "CI"]);
+        entry.Workflows.Single(workflow => workflow.Name == "CD").IsAnnounce.ShouldBeTrue();
+    }
 }

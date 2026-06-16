@@ -50,7 +50,7 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
 
         Repos.Clear();
         foreach (var repo in settings.Repos)
-            Repos.Add(new RepoEntryViewModel(repo));
+            Repos.Add(new RepoEntryViewModel(repo, await WorkflowsForAsync(repo, cancellationToken)));
 
         Rules.Clear();
         foreach (var (ruleId, enabled) in settings.RuleToggles)
@@ -76,7 +76,7 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         try
         {
             var repo = await gateway.ValidateAndDescribeAsync(parts[0], parts[1], cancellationToken);
-            Repos.Add(new RepoEntryViewModel(repo));
+            Repos.Add(new RepoEntryViewModel(repo, await WorkflowsForAsync(repo, cancellationToken)));
             NewRepo = string.Empty;
             StatusMessage = $"Added {repo.Owner}/{repo.Name}.";
             return true;
@@ -85,6 +85,20 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         {
             StatusMessage = $"Could not add repository: {exception.Message}";
             return false;
+        }
+    }
+
+    /// <summary>Lists a repo's workflows for the announce picker; falls back to none on failure.</summary>
+    private async Task<IReadOnlyList<string>> WorkflowsForAsync(RepoConfig repo, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await gateway.GetWorkflowNamesAsync(repo, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Could not list workflows for {repo.Owner}/{repo.Name}: {exception.Message}";
+            return [];
         }
     }
 
