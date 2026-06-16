@@ -1,10 +1,8 @@
-using Heimdall.Core.Models;
-
 namespace Heimdall.Core.Notifications;
 
-/// <summary>Shows a desktop notification for a pipeline transition. Platform-specific implementations.</summary>
+/// <summary>Shows a desktop notification. Platform-specific implementations.</summary>
 public interface INotificationManager
 {
-    /// <summary>Shows the notification. Clicking it should open the run (best-effort, platform-dependent).</summary>
-    Task ShowAsync(NotificationPayload payload);
+    /// <summary>Shows a notification. <paramref name="isAlert"/> hints at error styling (e.g. a red icon).</summary>
+    Task ShowAsync(string title, string body, bool isAlert = false);
 }

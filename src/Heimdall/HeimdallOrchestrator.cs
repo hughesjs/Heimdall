@@ -79,7 +79,11 @@ internal sealed class HeimdallOrchestrator(
         var polling = new PollingService(gateway, new RelevanceEngine(StandardRules.All));
         polling.Aggregate += status => Dispatcher.UIThread.Post(() => SetStatus(status));
         polling.Snapshot += pipelines => Dispatcher.UIThread.Post(() => RebuildMenu(pipelines));
-        polling.Transition += payload => Dispatcher.UIThread.Post(() => _ = notifications.ShowAsync(payload));
+        polling.Transition += payload => Dispatcher.UIThread.Post(() =>
+        {
+            var (title, body) = NotificationContent.Format(payload);
+            _ = notifications.ShowAsync(title, body, isAlert: payload.Kind == NotificationKind.Broke);
+        });
         polling.AuthenticationFailed += () =>
         {
             reauthRequired = true;
@@ -171,7 +175,7 @@ internal sealed class HeimdallOrchestrator(
             return;
         }
 
-        var viewModel = new SettingsViewModel(settingsStore, _gateway);
+        var viewModel = new SettingsViewModel(settingsStore, _gateway, notifications);
         _settingsWindow = new SettingsWindow { DataContext = viewModel };
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _ = viewModel.LoadAsync(_cts.Token);

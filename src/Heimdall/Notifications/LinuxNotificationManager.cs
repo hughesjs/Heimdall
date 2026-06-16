@@ -1,6 +1,5 @@
 using System.Runtime.Versioning;
 using Heimdall.Core.Notifications;
-using Heimdall.Core.Models;
 using Heimdall.Platform;
 
 namespace Heimdall.Notifications;
@@ -12,10 +11,9 @@ namespace Heimdall.Notifications;
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxNotificationManager : INotificationManager
 {
-    public Task ShowAsync(NotificationPayload payload)
+    public Task ShowAsync(string title, string body, bool isAlert = false)
     {
-        var (title, body) = NotificationContent.Format(payload);
-        var icon = payload.Kind == NotificationKind.Broke ? "dialog-error" : "dialog-information";
+        var icon = isAlert ? "dialog-error" : "dialog-information";
         Shell.TryStart("notify-send", "--app-name=Heimdall", $"--icon={icon}", title, body);
         return Task.CompletedTask;
     }

@@ -1,9 +1,21 @@
 using Heimdall.Core.Auth;
 using Heimdall.Core.GitHub;
 using Heimdall.Core.Models;
+using Heimdall.Core.Notifications;
 using Heimdall.Core.Settings;
 
 namespace Heimdall.UiTests;
+
+internal sealed class FakeNotificationManager : INotificationManager
+{
+    public List<(string Title, string Body, bool IsAlert)> Shown { get; } = [];
+
+    public Task ShowAsync(string title, string body, bool isAlert = false)
+    {
+        Shown.Add((title, body, isAlert));
+        return Task.CompletedTask;
+    }
+}
 
 internal sealed class InMemoryTokenStore(string? initial = null) : ITokenStore
 {

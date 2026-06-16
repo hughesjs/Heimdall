@@ -22,6 +22,12 @@ public partial class SettingsWindow : Window
             await viewModel.SaveAsync(default);
     }
 
+    public async void TestNotification(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } viewModel)
+            await viewModel.TestNotificationAsync();
+    }
+
     public void RemoveRepo(object? sender, RoutedEventArgs e)
     {
         if (sender is Control { DataContext: RepoEntryViewModel repo } && ViewModel is { } viewModel)
