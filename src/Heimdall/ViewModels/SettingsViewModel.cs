@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Heimdall.Core.GitHub;
 using Heimdall.Core.Models;
+using Heimdall.Core.Notifications;
 using Heimdall.Core.Rules;
 using Heimdall.Core.Settings;
 
@@ -12,7 +13,7 @@ namespace Heimdall.ViewModels;
 /// persists them. Adding a repo validates access via the gateway first. UI-framework-free, so the
 /// add/remove/build/save logic is unit-tested directly.
 /// </summary>
-public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGateway gateway) : ViewModelBase
+public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGateway gateway, INotificationManager notifications) : ViewModelBase
 {
     private static readonly IReadOnlyDictionary<string, string> RuleNames = new Dictionary<string, string>
     {
@@ -108,5 +109,12 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         {
             StatusMessage = $"Could not save: {exception.Message}";
         }
+    }
+
+    /// <summary>Fires a sample notification so the user can confirm desktop notifications actually appear.</summary>
+    public async Task TestNotificationAsync()
+    {
+        await notifications.ShowAsync("Heimdall", "Test notification — if you can see this, notifications are working.");
+        StatusMessage = "Test notification sent.";
     }
 }

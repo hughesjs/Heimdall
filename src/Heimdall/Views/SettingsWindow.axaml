@@ -49,6 +49,7 @@
             <NumericUpDown Minimum="10" Maximum="3600" Increment="10" Value="{Binding PollIntervalSeconds}" />
 
             <CheckBox Content="Show notifications" IsChecked="{Binding NotificationsEnabled}" />
+            <Button Content="Send test notification" Click="TestNotification" HorizontalAlignment="Left" />
 
             <TextBlock Text="{Binding StatusMessage}" Foreground="Gray" TextWrapping="Wrap" />
             <Button Content="Save" Click="Save" HorizontalAlignment="Right" />

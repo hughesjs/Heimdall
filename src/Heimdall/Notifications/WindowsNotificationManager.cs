@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using Heimdall.Core.Models;
 using Heimdall.Core.Notifications;
 using Heimdall.Platform;
 
@@ -12,9 +11,8 @@ namespace Heimdall.Notifications;
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsNotificationManager : INotificationManager
 {
-    public Task ShowAsync(NotificationPayload payload)
+    public Task ShowAsync(string title, string body, bool isAlert = false)
     {
-        var (title, body) = NotificationContent.Format(payload);
         var script =
             "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;" +
             "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);" +

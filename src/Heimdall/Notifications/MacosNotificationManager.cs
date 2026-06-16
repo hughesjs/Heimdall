@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using Heimdall.Core.Models;
 using Heimdall.Core.Notifications;
 using Heimdall.Platform;
 
@@ -12,9 +11,8 @@ namespace Heimdall.Notifications;
 [SupportedOSPlatform("macos")]
 internal sealed class MacosNotificationManager : INotificationManager
 {
-    public Task ShowAsync(NotificationPayload payload)
+    public Task ShowAsync(string title, string body, bool isAlert = false)
     {
-        var (title, body) = NotificationContent.Format(payload);
         var script = $"display notification \"{Escape(body)}\" with title \"{Escape(title)}\"";
         Shell.TryStart("osascript", "-e", script);
         return Task.CompletedTask;
