@@ -49,5 +49,18 @@ cp -R "$APP" dmg-staging/
 ln -s /Applications dmg-staging/Applications
 
 DMG="Heimdall-macos-${ARCH}-v${VERSION}.dmg"
-hdiutil create -volname "Heimdall" -srcfolder dmg-staging -ov -format UDZO "$DMG"
+
+# hdiutil create intermittently fails with "Resource busy" on CI runners (background Spotlight
+# indexing of the source folder); retry a few times before giving up.
+for attempt in 1 2 3 4 5; do
+    if hdiutil create -volname "Heimdall" -srcfolder dmg-staging -ov -format UDZO "$DMG"; then
+        break
+    fi
+    if [ "$attempt" -eq 5 ]; then
+        echo "hdiutil create failed after $attempt attempts" >&2
+        exit 1
+    fi
+    echo "hdiutil create failed (attempt $attempt) — retrying in 5s…" >&2
+    sleep 5
+done
 echo "Created $DMG"
