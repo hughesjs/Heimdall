@@ -108,4 +108,15 @@ public class SettingsViewModelTests
         entry.Workflows.Select(workflow => workflow.Name).ShouldBe(["CD", "CI"]);
         entry.Workflows.Single(workflow => workflow.Name == "CD").IsAnnounce.ShouldBeTrue();
     }
+
+    [Fact]
+    public async Task Load_populates_repo_suggestions_from_accessible_repos()
+    {
+        var gateway = new FakeGitHubGateway { OnGetAccessibleRepos = () => ["hughesjs/Heimdall", "finlegal/sdk"] };
+        var viewModel = new SettingsViewModel(new FakeSettingsStore(), gateway, new FakeNotificationManager());
+
+        await viewModel.LoadAsync(default);
+
+        viewModel.RepoSuggestions.ShouldBe(["hughesjs/Heimdall", "finlegal/sdk"]);
+    }
 }

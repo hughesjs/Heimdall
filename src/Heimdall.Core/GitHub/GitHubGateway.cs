@@ -59,6 +59,19 @@ public sealed class GitHubGateway : IGitHubGateway
             .ToList();
     }
 
+    public async Task<IReadOnlyList<string>> GetAccessibleRepositoriesAsync(CancellationToken cancellationToken)
+    {
+        // Default affiliation is owner + collaborator + organization member, so this covers the user's
+        // own repos and any org they belong to. PageSize 100 pulls all of them across pages.
+        var repos = await Guard(() => _client.Repository.GetAllForCurrent(new ApiOptions { PageSize = 100 }));
+        CaptureRateLimit();
+        return repos
+            .Select(repo => repo.FullName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(fullName => fullName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private async Task<RunRecord> MapAsync(WorkflowRun run, RepoConfig repo, CancellationToken cancellationToken)
     {
         var prNumbers = run.PullRequests?.Select(pr => pr.Number).ToList() ?? [];
