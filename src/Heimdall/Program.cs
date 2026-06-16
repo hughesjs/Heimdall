@@ -4,8 +4,8 @@ namespace Heimdall;
 
 internal sealed class Program
 {
-    // Initialization code. Don't use any Avalonia, third-party APIs or any SynchronizationContext-reliant
-    // code before AppMain is called: things aren't initialized yet and stuff might break.
+    // Don't touch Avalonia, third-party APIs, or SynchronizationContext-reliant code before
+    // StartWithClassicDesktopLifetime runs — nothing is initialised yet.
     [STAThread]
     public static void Main(string[] args)
     {
