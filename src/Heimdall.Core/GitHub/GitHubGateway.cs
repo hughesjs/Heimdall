@@ -48,7 +48,8 @@ public sealed class GitHubGateway : IGitHubGateway
 
     public async Task<IReadOnlyList<string>> GetWorkflowNamesAsync(RepoConfig repo, CancellationToken cancellationToken)
     {
-        var response = await Guard(() => _client.Actions.Workflows.List(repo.Owner, repo.Name));
+        var response = await Guard(() => _client.Actions.Workflows.List(
+            repo.Owner, repo.Name, new ApiOptions { PageSize = 100, PageCount = 1 }));
         CaptureRateLimit();
         return response.Workflows
             .Where(workflow => workflow.DeletedAt is null)
