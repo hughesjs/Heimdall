@@ -39,7 +39,8 @@
                 </ListBox.ItemTemplate>
             </ListBox>
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBox Width="340" PlaceholderText="owner/repo" Text="{Binding NewRepo}" />
+                <AutoCompleteBox Width="340" PlaceholderText="owner/repo" Text="{Binding NewRepo, Mode=TwoWay}"
+                                 ItemsSource="{Binding RepoSuggestions}" FilterMode="Contains" MinimumPrefixLength="1" />
                 <Button Content="Add" Click="AddRepo" />
             </StackPanel>
 

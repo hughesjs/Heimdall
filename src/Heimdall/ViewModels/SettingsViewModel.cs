@@ -25,6 +25,9 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
     public ObservableCollection<RepoEntryViewModel> Repos { get; } = [];
     public ObservableCollection<RuleToggle> Rules { get; } = [];
 
+    /// <summary>"owner/repo" suggestions for the add-repo box, fetched from the repos the user can access.</summary>
+    public ObservableCollection<string> RepoSuggestions { get; } = [];
+
     [ObservableProperty]
     private string _login = string.Empty;
 
@@ -55,6 +58,24 @@ public sealed partial class SettingsViewModel(ISettingsStore store, IGitHubGatew
         Rules.Clear();
         foreach (var (ruleId, enabled) in settings.RuleToggles)
             Rules.Add(new RuleToggle(ruleId, RuleNames.GetValueOrDefault(ruleId, ruleId), enabled));
+
+        RepoSuggestions.Clear();
+        foreach (var fullName in await SuggestionsAsync(cancellationToken))
+            RepoSuggestions.Add(fullName);
+    }
+
+    /// <summary>Repos the user can add, for autocomplete; empty (and a status note) if the listing fails.</summary>
+    private async Task<IReadOnlyList<string>> SuggestionsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await gateway.GetAccessibleRepositoriesAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = $"Could not list your repositories: {exception.Message}";
+            return [];
+        }
     }
 
     /// <summary>Validates access to <see cref="NewRepo"/> (<c>owner/repo</c>) and adds it on success.</summary>

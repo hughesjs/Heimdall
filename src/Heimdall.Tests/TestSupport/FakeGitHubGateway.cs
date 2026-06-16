@@ -19,4 +19,7 @@ internal sealed class FakeGitHubGateway : IGitHubGateway
 
     public Task<IReadOnlyList<string>> GetWorkflowNamesAsync(RepoConfig repo, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task<IReadOnlyList<string>> GetAccessibleRepositoriesAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
 }

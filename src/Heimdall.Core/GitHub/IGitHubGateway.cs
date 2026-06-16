@@ -18,6 +18,9 @@ public interface IGitHubGateway
     /// <summary>Lists the repo's workflow names (for choosing announce workflows in settings).</summary>
     Task<IReadOnlyList<string>> GetWorkflowNamesAsync(RepoConfig repo, CancellationToken cancellationToken);
 
+    /// <summary>Lists "owner/repo" for every repo the user can access (their own plus orgs they belong to), for autocomplete.</summary>
+    Task<IReadOnlyList<string>> GetAccessibleRepositoriesAsync(CancellationToken cancellationToken);
+
     /// <summary>The rate limit reported by the most recent API call, if any.</summary>
     RateLimitInfo? LastRateLimit { get; }
 }
