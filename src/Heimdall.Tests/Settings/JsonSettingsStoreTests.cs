@@ -28,12 +28,37 @@ public class JsonSettingsStoreTests
             await store.SaveAsync(settings, default);
             var loaded = await store.LoadAsync(default);
 
-            loaded.Repos.ShouldBe(settings.Repos);
+            loaded.Repos.Select(r => (r.Owner, r.Name, r.DefaultBranch)).ShouldBe(settings.Repos.Select(r => (r.Owner, r.Name, r.DefaultBranch)));
             loaded.Identity.ShouldBe(settings.Identity);
             loaded.RuleToggles[TriggeredByMeRule.RuleId].ShouldBeTrue();
             loaded.RuleToggles[DefaultBranchBreakingRule.RuleId].ShouldBeFalse();
             loaded.PollIntervalSeconds.ShouldBe(30);
             loaded.NotificationsEnabled.ShouldBeFalse();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Round_trips_announce_configuration()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"heimdall-announce-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new JsonSettingsStore(path);
+            var settings = AppSettings.Default with
+            {
+                Repos = [new RepoConfig("octo", "demo", "main") { AnnounceWorkflows = ["CD", "Release"], AnnounceFailures = true }]
+            };
+
+            await store.SaveAsync(settings, default);
+            var loaded = await store.LoadAsync(default);
+
+            var repo = loaded.Repos.ShouldHaveSingleItem();
+            repo.AnnounceWorkflows.ShouldBe(["CD", "Release"]);
+            repo.AnnounceFailures.ShouldBeTrue();
         }
         finally
         {

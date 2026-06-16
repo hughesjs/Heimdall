@@ -37,7 +37,9 @@ public class SettingsViewModelTests
         var added = await viewModel.AddRepoAsync(default);
 
         added.ShouldBeTrue();
-        viewModel.Repos.ShouldHaveSingleItem().ShouldBe(new RepoConfig("acme", "app", "main"));
+        var entry = viewModel.Repos.ShouldHaveSingleItem();
+        entry.Owner.ShouldBe("acme");
+        entry.Name.ShouldBe("app");
         viewModel.NewRepo.ShouldBeEmpty();
     }
 

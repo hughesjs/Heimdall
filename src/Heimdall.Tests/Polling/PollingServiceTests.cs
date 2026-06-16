@@ -18,6 +18,13 @@ public class PollingServiceTests
         PollIntervalSeconds: 60,
         NotificationsEnabled: notifications);
 
+    private static AppSettings AnnounceSettings(IReadOnlyList<string> announceWorkflows, bool announceFailures = false, bool notifications = true) => new(
+        Repos: [new RepoConfig("octo", "demo", "main") { AnnounceWorkflows = announceWorkflows, AnnounceFailures = announceFailures }],
+        Identity: new Identity("alice"),
+        RuleToggles: new Dictionary<string, bool> { [TriggeredByMeRule.RuleId] = true },
+        PollIntervalSeconds: 60,
+        NotificationsEnabled: notifications);
+
     private static PollingService NewService(FakeGitHubGateway gateway) => new(gateway, new RelevanceEngine(StandardRules.All));
 
     [Fact]
@@ -37,7 +44,7 @@ public class PollingServiceTests
         gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 3, runNumber: 3, actor: "alice")];
         await service.PollOnceAsync(Settings(), default); // recover
 
-        transitions.Select(t => t.Kind).ShouldBe([TransitionKind.Broke, TransitionKind.Recovered]);
+        transitions.Select(t => t.Kind).ShouldBe([NotificationKind.Broke, NotificationKind.Recovered]);
     }
 
     [Fact]
@@ -59,7 +66,7 @@ public class PollingServiceTests
         ];
         await service.PollOnceAsync(Settings(), default);
 
-        transitions.Single().Kind.ShouldBe(TransitionKind.Broke);
+        transitions.Single().Kind.ShouldBe(NotificationKind.Broke);
     }
 
     [Fact]
@@ -155,5 +162,98 @@ public class PollingServiceTests
 
         snapshot.ShouldNotBeNull();
         snapshot.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Announce_workflow_that_is_not_otherwise_relevant_is_tracked_and_announced()
+    {
+        var gateway = new FakeGitHubGateway();
+        var service = NewService(gateway);
+        var transitions = new List<NotificationPayload>();
+        service.Transition += transitions.Add;
+
+        // Authored by someone else (not relevant), but it is an announce workflow.
+        gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 1, runNumber: 1, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default); // silent seed
+
+        gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 2, runNumber: 2, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default); // shipped
+
+        transitions.Select(t => t.Kind).ShouldBe([NotificationKind.Released]);
+    }
+
+    [Fact]
+    public async Task Announce_only_pipeline_is_excluded_from_the_tray_aggregate()
+    {
+        // A failing announce-only pipeline must not turn the tray red — the tray means "one of *my* relevant pipelines is broken".
+        var gateway = new FakeGitHubGateway { OnGetRuns = _ => [Run(RunStatus.Failure, workflow: "CD", actor: "bob")] };
+        var service = NewService(gateway);
+        TrayStatus? last = null;
+        service.Aggregate += status => last = status;
+
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default);
+
+        last.ShouldBe(TrayStatus.Green);
+    }
+
+    [Fact]
+    public async Task Pipeline_that_is_both_relevant_and_announce_still_counts_toward_the_tray()
+    {
+        // A failing run I triggered on an announce workflow is still "mine" — the tray reddens (CountsTowardTray stays true).
+        var gateway = new FakeGitHubGateway { OnGetRuns = _ => [Run(RunStatus.Failure, workflow: "CD", actor: "alice")] };
+        var service = NewService(gateway);
+        TrayStatus? last = null;
+        service.Aggregate += status => last = status;
+
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default);
+
+        last.ShouldBe(TrayStatus.Red);
+    }
+
+    [Fact]
+    public async Task Announce_only_pipeline_still_appears_in_the_snapshot()
+    {
+        var gateway = new FakeGitHubGateway { OnGetRuns = _ => [Run(RunStatus.Success, workflow: "CD", actor: "bob")] };
+        var service = NewService(gateway);
+        IReadOnlyList<PipelineState>? snapshot = null;
+        service.Snapshot += states => snapshot = states;
+
+        await service.PollOnceAsync(AnnounceSettings(["CD"]), default);
+
+        snapshot.ShouldNotBeNull();
+        snapshot.ShouldHaveSingleItem().CountsTowardTray.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Announce_failure_notifies_broke_only_when_configured()
+    {
+        var gateway = new FakeGitHubGateway();
+        var service = NewService(gateway);
+        var transitions = new List<NotificationPayload>();
+        service.Transition += transitions.Add;
+
+        gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 1, runNumber: 1, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"], announceFailures: true), default); // seed
+
+        gateway.OnGetRuns = _ => [Run(RunStatus.Failure, runId: 2, runNumber: 2, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"], announceFailures: true), default); // broke
+
+        transitions.Select(t => t.Kind).ShouldBe([NotificationKind.Broke]);
+    }
+
+    [Fact]
+    public async Task Announce_respects_disabled_notifications()
+    {
+        var gateway = new FakeGitHubGateway();
+        var service = NewService(gateway);
+        var transitions = new List<NotificationPayload>();
+        service.Transition += transitions.Add;
+
+        gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 1, runNumber: 1, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"], notifications: false), default);
+        gateway.OnGetRuns = _ => [Run(RunStatus.Success, runId: 2, runNumber: 2, workflow: "CD", actor: "bob")];
+        await service.PollOnceAsync(AnnounceSettings(["CD"], notifications: false), default);
+
+        transitions.ShouldBeEmpty();
     }
 }

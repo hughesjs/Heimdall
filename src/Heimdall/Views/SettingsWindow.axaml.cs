@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Heimdall.Core.Models;
 using Heimdall.ViewModels;
 
 namespace Heimdall.Views;
@@ -25,7 +24,7 @@ public partial class SettingsWindow : Window
 
     public void RemoveRepo(object? sender, RoutedEventArgs e)
     {
-        if (sender is Control { DataContext: RepoConfig repo } && ViewModel is { } viewModel)
+        if (sender is Control { DataContext: RepoEntryViewModel repo } && ViewModel is { } viewModel)
             viewModel.RemoveRepo(repo);
     }
 }

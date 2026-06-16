@@ -1,7 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Heimdall.ViewModels"
-        xmlns:models="using:Heimdall.Core.Models"
         x:Class="Heimdall.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Width="520" Height="640"
@@ -14,17 +13,21 @@
             <TextBox PlaceholderText="GitHub login" Text="{Binding Login}" />
 
             <TextBlock Text="Repositories" FontWeight="SemiBold" />
-            <ListBox ItemsSource="{Binding Repos}" MaxHeight="160">
+            <ListBox ItemsSource="{Binding Repos}" MaxHeight="280">
                 <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="models:RepoConfig">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding Owner}" />
-                                <TextBlock Text="/" />
-                                <TextBlock Text="{Binding Name}" />
-                            </StackPanel>
-                            <Button Grid.Column="1" Content="Remove" Click="RemoveRepo" />
-                        </Grid>
+                    <DataTemplate x:DataType="vm:RepoEntryViewModel">
+                        <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Owner}" />
+                                    <TextBlock Text="/" />
+                                    <TextBlock Text="{Binding Name}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="Remove" Click="RemoveRepo" />
+                            </Grid>
+                            <TextBox PlaceholderText="Announce workflows (comma-separated)" Text="{Binding AnnounceWorkflowsText}" />
+                            <CheckBox Content="Notify on failures too" IsChecked="{Binding AnnounceFailures}" />
+                        </StackPanel>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>

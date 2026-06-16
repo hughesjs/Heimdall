@@ -58,6 +58,11 @@ Take the latest **relevant** run for the key (highest `RunNumber`):
 
 The silent-seed rule subsumes the "first poll" case — on cycle 1 every key is new, so the baseline is silent without a separate flag.
 
+### Notification policies — transitions vs announce
+`PipelineStateMachine.Apply` takes a `NotifyPolicy` (`Transitions` | `Announce`). `Transitions` is the rule above. `Announce` (release announcements, SPEC §6) ignores green↔red flips and instead fires on **each new settled run** of an *announce workflow*: success → `Released` ("shipped") always, failure → `Broke` only when the repo's `AnnounceFailures` is set, otherwise silent. Announcements are deduped per run via `PipelineState.LastAnnouncedRunId` (a settled run is announced at most once, even when first seen in-progress then settling); a settled run seen on first sighting seeds the marker silently so a pre-existing release isn't re-announced on restart.
+
+Announce workflows are **notification-only**: a pipeline tracked solely because its workflow is an announce workflow (not relevant via the rules) has `CountsTowardTray = false`, so it stays in the snapshot/menu but never recolours the tray — the tray keeps meaning "one of *my* relevant pipelines is broken." The poll loop broadens its per-key filter to *relevant ∪ announce-workflow* runs, chooses the policy per key, and aggregates the tray over only the `CountsTowardTray` states. When a pipeline is *both* relevant and an announce workflow, the `Announce` policy still wins (one policy per key) but `CountsTowardTray` stays true — so a failed run reddens the tray even though no `Broke` notification fires unless `AnnounceFailures` is set.
+
 ### Tray aggregation
 Priority **Grey** (disconnected/error) › **Red** (any `Failure`) › **Amber** (any `InProgress`) › **Green**. Red beats Amber so a known breakage stays visible while something re-runs.
 
@@ -200,6 +205,7 @@ Token stores and `RepoConfig` live in Core (Avalonia-free) rather than the app, 
 6. Tray priority **Grey › Red › Amber › Green**.
 7. Pruning retains `Failure` keys longer than `Success`.
 8. **Non-expiring token, no refresh** (amends SPEC §3); re-auth on 401 only.
+9. Two **notification policies** (`Transitions` | `Announce`); announce workflows are **notification-only** (`CountsTowardTray = false`) so they never recolour the tray.
 
 ---
 

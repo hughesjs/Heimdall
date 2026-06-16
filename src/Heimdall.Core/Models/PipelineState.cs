@@ -10,4 +10,11 @@ public record PipelineState(
     RunStatus LastSettledStatus,
     bool InProgress,
     long LastRunId,
-    RunRecord LastRun);
+    RunRecord LastRun)
+{
+    /// <summary>Last run id announced for this pipeline under the announce policy (null = none seen).</summary>
+    public long? LastAnnouncedRunId { get; init; }
+
+    /// <summary>False for announce-only pipelines, which are tracked for notifications but must not recolour the tray.</summary>
+    public bool CountsTowardTray { get; init; } = true;
+}

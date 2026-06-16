@@ -10,36 +10,78 @@ namespace Heimdall.Core.Polling;
 public static class PipelineStateMachine
 {
     /// <summary>
-    /// Folds the latest relevant run for a pipeline into its prior state, returning the new state
-    /// and a notification iff a settled green↔red flip occurred.
+    /// Folds the latest run for a pipeline into its prior state, returning the new state and an
+    /// optional notification. Under <see cref="NotifyPolicy.Transitions"/> a notification fires iff a
+    /// settled green↔red flip occurred; under <see cref="NotifyPolicy.Announce"/> each new settled run
+    /// of the (announce) workflow notifies — success always, failure only when
+    /// <paramref name="announceFailures"/> is set.
     /// </summary>
     /// <remarks>
     /// A first sighting (<paramref name="prior"/> is null) seeds silently. In-progress and unknown
     /// runs preserve the settled anchor, so a re-run in flight or a cancelled run never fires a false
-    /// transition. Only Success↔Failure flips notify.
+    /// transition. Under the announce policy, announcements are deduped per run id so a settled run is
+    /// announced at most once, and a pre-existing release seen on first sighting is suppressed.
     /// </remarks>
-    public static (PipelineState State, NotificationPayload? Notification) Apply(PipelineState? prior, RunRecord latest)
+    public static (PipelineState State, NotificationPayload? Notification) Apply(
+        PipelineState? prior,
+        RunRecord latest,
+        NotifyPolicy policy = NotifyPolicy.Transitions,
+        bool announceFailures = false) =>
+        policy == NotifyPolicy.Announce
+            ? ApplyAnnounce(prior, latest, announceFailures)
+            : ApplyTransitions(prior, latest);
+
+    private static (PipelineState State, NotificationPayload? Notification) ApplyTransitions(PipelineState? prior, RunRecord latest)
     {
         var key = PipelineKey.For(latest);
+        var lastAnnounced = prior?.LastAnnouncedRunId;
 
         // In-progress and unknown runs carry no new settled pass/fail signal: keep the prior anchor.
         if (latest.Status is RunStatus.InProgress or RunStatus.Unknown)
         {
             var anchor = prior?.LastSettledStatus ?? RunStatus.Unknown;
             var inProgress = latest.Status == RunStatus.InProgress;
-            return (new PipelineState(key, anchor, inProgress, latest.RunId, latest), null);
+            return (new PipelineState(key, anchor, inProgress, latest.RunId, latest) { LastAnnouncedRunId = lastAnnounced }, null);
         }
 
         // Settled Success or Failure.
         var from = prior?.LastSettledStatus ?? RunStatus.Unknown;
         var to = latest.Status;
-        var state = new PipelineState(key, to, InProgress: false, latest.RunId, latest);
+        var state = new PipelineState(key, to, InProgress: false, latest.RunId, latest) { LastAnnouncedRunId = lastAnnounced };
 
         if (!IsNotableTransition(from, to))
             return (state, null); // silent seed, unchanged, or a transition touching Unknown
 
-        var kind = to == RunStatus.Failure ? TransitionKind.Broke : TransitionKind.Recovered;
+        var kind = to == RunStatus.Failure ? NotificationKind.Broke : NotificationKind.Recovered;
         return (state, new NotificationPayload(kind, latest));
+    }
+
+    private static (PipelineState State, NotificationPayload? Notification) ApplyAnnounce(PipelineState? prior, RunRecord latest, bool announceFailures)
+    {
+        var key = PipelineKey.For(latest);
+        var anchor = latest.Status is RunStatus.Success or RunStatus.Failure ? latest.Status : prior?.LastSettledStatus ?? RunStatus.Unknown;
+        var inProgress = latest.Status == RunStatus.InProgress;
+
+        // In-progress and unknown runs carry no release signal: carry the prior announce marker, no notify.
+        if (latest.Status is RunStatus.InProgress or RunStatus.Unknown)
+            return (new PipelineState(key, anchor, inProgress, latest.RunId, latest) { LastAnnouncedRunId = prior?.LastAnnouncedRunId }, null);
+
+        // Settled. First sighting seeds the announce marker silently (suppress a pre-existing release).
+        if (prior is null)
+            return (new PipelineState(key, anchor, InProgress: false, latest.RunId, latest) { LastAnnouncedRunId = latest.RunId }, null);
+
+        var state = new PipelineState(key, anchor, InProgress: false, latest.RunId, latest) { LastAnnouncedRunId = latest.RunId };
+
+        // Already announced this run id (e.g. re-seen across polls, or seen in-progress then settled): no repeat.
+        if (prior.LastAnnouncedRunId == latest.RunId)
+            return (state, null);
+
+        // A new settled run: success always ships; failure only when configured.
+        if (latest.Status == RunStatus.Success)
+            return (state, new NotificationPayload(NotificationKind.Released, latest));
+        if (announceFailures)
+            return (state, new NotificationPayload(NotificationKind.Broke, latest));
+        return (state, null);
     }
 
     /// <summary>Only settled green↔red flips are worth a notification.</summary>

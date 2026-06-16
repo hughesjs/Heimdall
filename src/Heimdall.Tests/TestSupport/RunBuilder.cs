@@ -10,6 +10,7 @@ internal static class RunBuilder
         long runId = 1,
         int runNumber = 1,
         long workflowId = 100,
+        string workflow = "CI",
         string owner = "octo",
         string repo = "demo",
         string branch = "main",
@@ -20,7 +21,7 @@ internal static class RunBuilder
         new(
             RunId: runId,
             WorkflowId: workflowId,
-            WorkflowName: "CI",
+            WorkflowName: workflow,
             RepoOwner: owner,
             RepoName: repo,
             HeadBranch: branch,
