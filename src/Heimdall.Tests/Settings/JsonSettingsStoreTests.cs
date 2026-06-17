@@ -108,4 +108,30 @@ public class JsonSettingsStoreTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task Save_succeeds_while_the_file_is_open_for_reading()
+    {
+        // Reproduces the Windows bug: the polling loop reads settings.json continuously, and its open
+        // read handle must not block a concurrent save. We hold a FileShare.Read handle (as File.OpenRead
+        // would) and assert the save still lands. Before the reader share-mode fix, the rename-replace
+        // threw "in use by another process" on Windows.
+        var path = Path.Combine(Path.GetTempPath(), $"heimdall-locked-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new JsonSettingsStore(path);
+            await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 10 }, default);
+
+            await using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 42 }, default);
+            }
+
+            (await store.LoadAsync(default)).PollIntervalSeconds.ShouldBe(42);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

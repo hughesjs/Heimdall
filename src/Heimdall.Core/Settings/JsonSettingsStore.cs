@@ -27,7 +27,11 @@ public sealed class JsonSettingsStore : ISettingsStore
         if (!File.Exists(_path))
             return AppSettings.Default;
 
-        await using var stream = File.OpenRead(_path);
+        // Share Delete (and Write) so the polling loop holding this file open for a read never blocks
+        // a concurrent SaveAsync. On Windows, File.OpenRead's default FileShare.Read forbids the
+        // rename-replace below, so an overlapping read would make the save throw "in use by another
+        // process". POSIX rename-over-open-file always succeeds, which is why this only bit Windows.
+        await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, Options, cancellationToken);
         return settings ?? AppSettings.Default;
     }
@@ -45,6 +49,30 @@ public sealed class JsonSettingsStore : ISettingsStore
             await JsonSerializer.SerializeAsync(stream, settings, Options, cancellationToken);
         }
 
-        File.Move(tempPath, _path, overwrite: true);
+        await ReplaceWithRetryAsync(tempPath, cancellationToken);
+    }
+
+    // The reader fix removes the polling-loop collision, but a Windows AV scanner or the search
+    // indexer can still hold a just-closed file briefly. Retry the replace a few times to ride that
+    // out rather than surfacing a transient lock to the user as a failed save.
+    private async Task ReplaceWithRetryAsync(string tempPath, CancellationToken cancellationToken)
+    {
+        const int attempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(tempPath, _path, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < attempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
+            }
+            catch (UnauthorizedAccessException) when (attempt < attempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
+            }
+        }
     }
 }
