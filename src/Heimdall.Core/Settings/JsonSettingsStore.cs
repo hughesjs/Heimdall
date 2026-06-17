@@ -27,10 +27,13 @@ public sealed class JsonSettingsStore : ISettingsStore
         if (!File.Exists(_path))
             return AppSettings.Default;
 
-        // Share Delete (and Write) so the polling loop holding this file open for a read never blocks
-        // a concurrent SaveAsync. On Windows, File.OpenRead's default FileShare.Read forbids the
-        // rename-replace below, so an overlapping read would make the save throw "in use by another
-        // process". POSIX rename-over-open-file always succeeds, which is why this only bit Windows.
+        // Share Delete (and Write) so that when this app's own polling loop has the file open for a read,
+        // a concurrent SaveAsync can still replace it. On Windows the rename-replace below opens the target
+        // for delete, which only succeeds if every open handle granted FileShare.Delete; File.OpenRead's
+        // default (FileShare.Read) withholds it, so an overlapping read made the save throw "in use by
+        // another process". POSIX rename-over-open-file always succeeds, which is why this only bit Windows.
+        // Handles held by *other* processes (AV, indexer) are covered by the retry in ReplaceWithRetryAsync,
+        // not by this share mode.
         await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, Options, cancellationToken);
         return settings ?? AppSettings.Default;

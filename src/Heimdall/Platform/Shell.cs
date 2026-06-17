@@ -18,18 +18,28 @@ internal static class Shell
     {
         try
         {
-            var startInfo = new ProcessStartInfo(fileName) { UseShellExecute = false, CreateNoWindow = true };
-            foreach (var argument in arguments)
-                startInfo.ArgumentList.Add(argument);
-            if (environment is not null)
-                foreach (var (key, value) in environment)
-                    startInfo.Environment[key] = value;
-            Process.Start(startInfo);
+            Process.Start(BuildStartInfo(fileName, arguments, environment));
         }
         catch
         {
             // Best-effort: a missing tool or desktop service must not crash the app.
         }
+    }
+
+    /// <summary>
+    /// Builds the <see cref="ProcessStartInfo"/> for <see cref="TryStart(string, string[], IReadOnlyDictionary{string, string})"/>.
+    /// Split out so the argument/environment plumbing — the part that keeps untrusted text out of the
+    /// command line and script source — can be unit-tested without spawning a process.
+    /// </summary>
+    internal static ProcessStartInfo BuildStartInfo(string fileName, string[] arguments, IReadOnlyDictionary<string, string>? environment)
+    {
+        var startInfo = new ProcessStartInfo(fileName) { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+        if (environment is not null)
+            foreach (var (key, value) in environment)
+                startInfo.Environment[key] = value;
+        return startInfo;
     }
 
     /// <summary>Opens a URL in the user's default browser.</summary>

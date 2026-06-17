@@ -9,15 +9,14 @@ public class NotificationManagerTests
     [Fact]
     public void Factory_selects_the_manager_for_the_current_os()
     {
-        var manager = NotificationManagerFactory.Create();
-
+        // Create() throws on an unsupported OS, so assert the throw there rather than a returned instance.
         if (OperatingSystem.IsWindows())
-            manager.ShouldBeOfType<WindowsNotificationManager>();
+            NotificationManagerFactory.Create().ShouldBeOfType<WindowsNotificationManager>();
         else if (OperatingSystem.IsMacOS())
-            manager.ShouldBeOfType<MacosNotificationManager>();
+            NotificationManagerFactory.Create().ShouldBeOfType<MacosNotificationManager>();
         else if (OperatingSystem.IsLinux())
-            manager.ShouldBeOfType<LinuxNotificationManager>();
+            NotificationManagerFactory.Create().ShouldBeOfType<LinuxNotificationManager>();
         else
-            manager.ShouldBeAssignableTo<INotificationManager>();
+            Should.Throw<PlatformNotSupportedException>(() => NotificationManagerFactory.Create());
     }
 }

@@ -15,12 +15,14 @@ internal sealed class MacosNotificationManager : INotificationManager
     {
         // The body and title are passed as osascript arguments (read back as `item 1`/`item 2 of argv`)
         // rather than interpolated into the AppleScript source, so a quote or backslash in a repo/branch
-        // name can't break out of the string literal. Nothing to escape.
+        // name can't break out of the string literal. Nothing to escape. The `--` ends osascript's own
+        // option parsing, so a value beginning with `-` is treated as an argument rather than a flag
+        // (which would otherwise silently show no notification).
         Shell.TryStart("osascript",
             "-e", "on run argv",
             "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
             "-e", "end run",
-            body, title);
+            "--", body, title);
         return Task.CompletedTask;
     }
 }

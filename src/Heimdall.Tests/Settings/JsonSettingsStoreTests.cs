@@ -134,4 +134,27 @@ public class JsonSettingsStoreTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task Save_surfaces_the_failure_when_the_destination_can_never_be_replaced()
+    {
+        // Point the store at a path that is actually a (non-empty) directory: File.Move(overwrite: true)
+        // can't replace a directory with a file, so it throws IOException on every attempt, on all
+        // platforms. This pins ReplaceWithRetryAsync's terminal contract — a genuinely stuck save exhausts
+        // its retries and propagates the error rather than swallowing it (which would silently lose the
+        // user's edits).
+        var directoryAsPath = Path.Combine(Path.GetTempPath(), $"heimdall-stuck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directoryAsPath);
+        await File.WriteAllTextAsync(Path.Combine(directoryAsPath, "occupied"), "x");
+        try
+        {
+            var store = new JsonSettingsStore(directoryAsPath);
+
+            await Should.ThrowAsync<IOException>(() => store.SaveAsync(AppSettings.Default, default));
+        }
+        finally
+        {
+            Directory.Delete(directoryAsPath, recursive: true);
+        }
+    }
 }
