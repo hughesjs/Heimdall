@@ -27,14 +27,14 @@ public sealed class JsonSettingsStore : ISettingsStore
         if (!File.Exists(_path))
             return AppSettings.Default;
 
-        // Share Delete (and Write) so that when this app's own polling loop has the file open for a read,
-        // a concurrent SaveAsync can still replace it. On Windows the rename-replace below opens the target
-        // for delete, which only succeeds if every open handle granted FileShare.Delete; File.OpenRead's
-        // default (FileShare.Read) withholds it, so an overlapping read made the save throw "in use by
-        // another process". POSIX rename-over-open-file always succeeds, which is why this only bit Windows.
-        // Handles held by *other* processes (AV, indexer) are covered by the retry in ReplaceWithRetryAsync,
-        // not by this share mode.
-        await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        // Share Delete (and Write) so a concurrent SaveAsync can swap this file out while the polling loop
+        // has it open for a read — without it, the replace fails on Windows. Open through the same transient
+        // retry as the write side: during a replace the target is briefly in a "delete pending" state on
+        // Windows, which makes an overlapping open throw UnauthorizedAccessException; retrying rides out that
+        // sub-millisecond window.
+        await using var stream = await WithTransientRetryAsync(
+            () => new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete),
+            cancellationToken);
         var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, Options, cancellationToken);
         return settings ?? AppSettings.Default;
     }
@@ -44,35 +44,43 @@ public sealed class JsonSettingsStore : ISettingsStore
         var directory = Path.GetDirectoryName(_path)!;
         Directory.CreateDirectory(directory);
 
-        // Write to a temp file then move it into place, so a crash mid-write can't corrupt the
-        // existing settings (which would silently reset the user's repo list to defaults).
+        // Write to a temp file then swap it into place, so a crash mid-write can't corrupt the existing
+        // settings (which would silently reset the user's repo list to defaults).
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(_path)}.{Guid.NewGuid():N}.tmp");
         await using (var stream = File.Create(tempPath))
         {
             await JsonSerializer.SerializeAsync(stream, settings, Options, cancellationToken);
         }
 
-        await ReplaceWithRetryAsync(tempPath, cancellationToken);
+        await WithTransientRetryAsync(() => { SwapIntoPlace(tempPath); return 0; }, cancellationToken);
     }
 
-    // The reader fix removes the polling-loop collision, but a Windows AV scanner or the search
-    // indexer can still hold a just-closed file briefly. Retry the replace a few times to ride that
-    // out rather than surfacing a transient lock to the user as a failed save.
-    private async Task ReplaceWithRetryAsync(string tempPath, CancellationToken cancellationToken)
+    // Atomically move the freshly written temp file onto _path. On Windows, File.Move(overwrite: true)
+    // (MoveFileEx) fails when the target is open for reading even if the reader granted FileShare.Delete;
+    // File.Replace (ReplaceFile) is the primitive built to swap out a file a reader has open. It needs the
+    // target to already exist, so fall back to a plain move on first write.
+    private void SwapIntoPlace(string tempPath)
+    {
+        if (File.Exists(_path))
+            File.Replace(tempPath, _path, destinationBackupFileName: null);
+        else
+            File.Move(tempPath, _path);
+    }
+
+    // File operations here can hit transient IOException / UnauthorizedAccessException on Windows: an AV
+    // scanner or the search indexer holding a just-touched file, or the brief delete-pending window during a
+    // replace. Retry a few times so a momentary lock doesn't surface as a lost save or a failed read; a
+    // genuinely stuck file still propagates on the final attempt.
+    private static async Task<T> WithTransientRetryAsync<T>(Func<T> operation, CancellationToken cancellationToken)
     {
         const int attempts = 5;
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                File.Move(tempPath, _path, overwrite: true);
-                return;
+                return operation();
             }
-            catch (IOException) when (attempt < attempts)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
-            }
-            catch (UnauthorizedAccessException) when (attempt < attempts)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException && attempt < attempts)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken);
             }

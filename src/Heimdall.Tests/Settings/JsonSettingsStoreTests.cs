@@ -113,11 +113,11 @@ public class JsonSettingsStoreTests
     public async Task Save_succeeds_while_the_settings_file_is_being_read_concurrently()
     {
         // The polling loop reads settings.json continuously via LoadAsync; a concurrent SaveAsync must not
-        // fail. Before LoadAsync opened the file with FileShare.Delete, the atomic rename-replace in
-        // SaveAsync threw a sharing violation on Windows whenever a read overlapped it. This drives the
-        // real production reader (not a hand-rolled handle) in a tight loop while hammering saves, so the
-        // share mode that actually fixes the bug is the thing under test. On Windows pre-fix this fails
-        // reliably; on POSIX, rename-over-open always succeeds.
+        // fail. On Windows this needs all three of: the reader granting FileShare.Delete, the writer using
+        // File.Replace (not File.Move(overwrite), which can't swap a file a reader holds open), and a
+        // transient-retry on both sides. This drives the real production reader (not a hand-rolled handle)
+        // in a tight loop while hammering saves, so the actual fix is the thing under test. On POSIX,
+        // rename-over-open always succeeds.
         var path = Path.Combine(Path.GetTempPath(), $"heimdall-concurrent-{Guid.NewGuid():N}.json");
         try
         {
@@ -148,10 +148,10 @@ public class JsonSettingsStoreTests
     [Fact]
     public async Task Save_surfaces_the_failure_when_the_destination_can_never_be_replaced()
     {
-        // Point the store at a path that is actually a (non-empty) directory: File.Move(overwrite: true)
-        // can't replace a directory with a file, so it throws on every attempt — IOException on POSIX,
-        // UnauthorizedAccessException on Windows (both are what ReplaceWithRetryAsync retries on). This
-        // pins its terminal contract: a genuinely stuck save exhausts its retries and propagates the error
+        // Point the store at a path that is actually a (non-empty) directory: the swap can't replace a
+        // directory with a file, so it throws on every attempt — IOException on POSIX,
+        // UnauthorizedAccessException on Windows (both are what the transient retry retries on). This pins
+        // its terminal contract: a genuinely stuck save exhausts its retries and propagates the error
         // rather than swallowing it (which would silently lose the user's edits).
         var directoryAsPath = Path.Combine(Path.GetTempPath(), $"heimdall-stuck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directoryAsPath);
