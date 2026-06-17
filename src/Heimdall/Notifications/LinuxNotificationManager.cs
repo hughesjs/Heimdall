@@ -14,7 +14,9 @@ internal sealed class LinuxNotificationManager : INotificationManager
     public Task ShowAsync(string title, string body, bool isAlert = false)
     {
         var icon = isAlert ? "dialog-error" : "dialog-information";
-        Shell.TryStart("notify-send", "--app-name=Heimdall", $"--icon={icon}", title, body);
+        // `--` ends notify-send's option parsing so a title/body beginning with `-` is treated as the
+        // summary/body rather than a flag (which would otherwise silently swallow the notification).
+        Shell.TryStart("notify-send", "--app-name=Heimdall", $"--icon={icon}", "--", title, body);
         return Task.CompletedTask;
     }
 }

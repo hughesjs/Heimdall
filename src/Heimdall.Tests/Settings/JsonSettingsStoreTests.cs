@@ -108,4 +108,64 @@ public class JsonSettingsStoreTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task Save_succeeds_while_the_settings_file_is_being_read_concurrently()
+    {
+        // The polling loop reads settings.json continuously via LoadAsync; a concurrent SaveAsync must not
+        // fail. On Windows this needs all three of: the reader granting FileShare.Delete, the writer using
+        // File.Replace (not File.Move(overwrite), which can't swap a file a reader holds open), and a
+        // transient-retry on both sides. This drives the real production reader (not a hand-rolled handle)
+        // in a tight loop while hammering saves, so the actual fix is the thing under test. On POSIX,
+        // rename-over-open always succeeds.
+        var path = Path.Combine(Path.GetTempPath(), $"heimdall-concurrent-{Guid.NewGuid():N}.json");
+        try
+        {
+            var store = new JsonSettingsStore(path);
+            await store.SaveAsync(AppSettings.Default, default);
+
+            var stop = false;
+            var reader = Task.Run(async () =>
+            {
+                while (!Volatile.Read(ref stop))
+                    await store.LoadAsync(default);
+            });
+
+            for (var i = 0; i < 100; i++)
+                await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = i }, default);
+
+            Volatile.Write(ref stop, true);
+            await reader; // also surfaces any exception thrown on the read side
+
+            (await store.LoadAsync(default)).PollIntervalSeconds.ShouldBe(99);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Save_surfaces_the_failure_when_the_destination_can_never_be_replaced()
+    {
+        // Point the store at a path that is actually a (non-empty) directory: the swap can't replace a
+        // directory with a file, so it throws on every attempt — IOException on POSIX,
+        // UnauthorizedAccessException on Windows (both are what the transient retry retries on). This pins
+        // its terminal contract: a genuinely stuck save exhausts its retries and propagates the error
+        // rather than swallowing it (which would silently lose the user's edits).
+        var directoryAsPath = Path.Combine(Path.GetTempPath(), $"heimdall-stuck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directoryAsPath);
+        await File.WriteAllTextAsync(Path.Combine(directoryAsPath, "occupied"), "x");
+        try
+        {
+            var store = new JsonSettingsStore(directoryAsPath);
+
+            var exception = await Should.ThrowAsync<Exception>(() => store.SaveAsync(AppSettings.Default, default));
+            (exception is IOException or UnauthorizedAccessException).ShouldBeTrue($"Unexpected exception type: {exception.GetType()}");
+        }
+        finally
+        {
+            Directory.Delete(directoryAsPath, recursive: true);
+        }
+    }
 }
