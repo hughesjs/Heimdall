@@ -110,24 +110,34 @@ public class JsonSettingsStoreTests
     }
 
     [Fact]
-    public async Task Save_succeeds_while_the_file_is_open_for_reading()
+    public async Task Save_succeeds_while_the_settings_file_is_being_read_concurrently()
     {
-        // Reproduces the Windows bug: the polling loop reads settings.json continuously, and its open
-        // read handle must not block a concurrent save. We hold a FileShare.Read handle (as File.OpenRead
-        // would) and assert the save still lands. Before the reader share-mode fix, the rename-replace
-        // threw "in use by another process" on Windows.
-        var path = Path.Combine(Path.GetTempPath(), $"heimdall-locked-{Guid.NewGuid():N}.json");
+        // The polling loop reads settings.json continuously via LoadAsync; a concurrent SaveAsync must not
+        // fail. Before LoadAsync opened the file with FileShare.Delete, the atomic rename-replace in
+        // SaveAsync threw a sharing violation on Windows whenever a read overlapped it. This drives the
+        // real production reader (not a hand-rolled handle) in a tight loop while hammering saves, so the
+        // share mode that actually fixes the bug is the thing under test. On Windows pre-fix this fails
+        // reliably; on POSIX, rename-over-open always succeeds.
+        var path = Path.Combine(Path.GetTempPath(), $"heimdall-concurrent-{Guid.NewGuid():N}.json");
         try
         {
             var store = new JsonSettingsStore(path);
-            await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 10 }, default);
+            await store.SaveAsync(AppSettings.Default, default);
 
-            await using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            var stop = false;
+            var reader = Task.Run(async () =>
             {
-                await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = 42 }, default);
-            }
+                while (!Volatile.Read(ref stop))
+                    await store.LoadAsync(default);
+            });
 
-            (await store.LoadAsync(default)).PollIntervalSeconds.ShouldBe(42);
+            for (var i = 0; i < 100; i++)
+                await store.SaveAsync(AppSettings.Default with { PollIntervalSeconds = i }, default);
+
+            Volatile.Write(ref stop, true);
+            await reader; // also surfaces any exception thrown on the read side
+
+            (await store.LoadAsync(default)).PollIntervalSeconds.ShouldBe(99);
         }
         finally
         {
@@ -139,10 +149,10 @@ public class JsonSettingsStoreTests
     public async Task Save_surfaces_the_failure_when_the_destination_can_never_be_replaced()
     {
         // Point the store at a path that is actually a (non-empty) directory: File.Move(overwrite: true)
-        // can't replace a directory with a file, so it throws IOException on every attempt, on all
-        // platforms. This pins ReplaceWithRetryAsync's terminal contract — a genuinely stuck save exhausts
-        // its retries and propagates the error rather than swallowing it (which would silently lose the
-        // user's edits).
+        // can't replace a directory with a file, so it throws on every attempt — IOException on POSIX,
+        // UnauthorizedAccessException on Windows (both are what ReplaceWithRetryAsync retries on). This
+        // pins its terminal contract: a genuinely stuck save exhausts its retries and propagates the error
+        // rather than swallowing it (which would silently lose the user's edits).
         var directoryAsPath = Path.Combine(Path.GetTempPath(), $"heimdall-stuck-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directoryAsPath);
         await File.WriteAllTextAsync(Path.Combine(directoryAsPath, "occupied"), "x");
@@ -150,7 +160,8 @@ public class JsonSettingsStoreTests
         {
             var store = new JsonSettingsStore(directoryAsPath);
 
-            await Should.ThrowAsync<IOException>(() => store.SaveAsync(AppSettings.Default, default));
+            var exception = await Should.ThrowAsync<Exception>(() => store.SaveAsync(AppSettings.Default, default));
+            (exception is IOException or UnauthorizedAccessException).ShouldBeTrue($"Unexpected exception type: {exception.GetType()}");
         }
         finally
         {
