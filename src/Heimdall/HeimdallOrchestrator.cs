@@ -133,19 +133,25 @@ internal sealed class HeimdallOrchestrator(
     {
         _menu.Items.Clear();
 
-        if (pipelines.Count == 0)
+        var groups = TrayMenuModel.Build(pipelines);
+        if (groups.Count == 0)
         {
             _menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
         }
         else
         {
-            foreach (var pipeline in pipelines.OrderBy(p => p.Key.Repo).ThenBy(p => p.Key.HeadBranch))
+            foreach (var group in groups)
             {
-                var label = $"{pipeline.Key.Owner}/{pipeline.Key.Repo} · {pipeline.LastRun.WorkflowName} · {pipeline.Key.HeadBranch} — {Describe(pipeline)}";
-                var item = new NativeMenuItem(label);
-                var url = pipeline.LastRun.HtmlUrl;
-                item.Click += (_, _) => Shell.OpenUrl(url);
-                _menu.Items.Add(item);
+                var submenu = new NativeMenu();
+                foreach (var entry in group.Pipelines)
+                {
+                    var item = new NativeMenuItem($"{entry.Dot} {entry.Label}");
+                    var url = entry.Url;
+                    item.Click += (_, _) => Shell.OpenUrl(url);
+                    submenu.Items.Add(item);
+                }
+
+                _menu.Items.Add(new NativeMenuItem(group.Header) { Menu = submenu });
             }
         }
 
@@ -159,14 +165,6 @@ internal sealed class HeimdallOrchestrator(
         quit.Click += (_, _) => Quit();
         _menu.Items.Add(quit);
     }
-
-    private static string Describe(PipelineState pipeline) => pipeline switch
-    {
-        { InProgress: true } => "running",
-        { LastSettledStatus: RunStatus.Failure } => "failing",
-        { LastSettledStatus: RunStatus.Success } => "passing",
-        _ => "unknown"
-    };
 
     private void ShowSettings()
     {
