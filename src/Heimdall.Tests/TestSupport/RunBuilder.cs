@@ -17,7 +17,8 @@ internal static class RunBuilder
         string actor = "alice",
         string ev = "push",
         IReadOnlyList<int>? prNumbers = null,
-        IReadOnlyList<string>? prAuthors = null) =>
+        IReadOnlyList<string>? prAuthors = null,
+        DateTimeOffset? createdAt = null) =>
         new(
             RunId: runId,
             WorkflowId: workflowId,
@@ -32,5 +33,5 @@ internal static class RunBuilder
             PullRequestNumbers: prNumbers ?? [],
             PullRequestAuthorLogins: prAuthors ?? [],
             HtmlUrl: $"https://github.com/{owner}/{repo}/actions/runs/{runId}",
-            CreatedAt: DateTimeOffset.UnixEpoch);
+            CreatedAt: createdAt ?? DateTimeOffset.UtcNow);
 }

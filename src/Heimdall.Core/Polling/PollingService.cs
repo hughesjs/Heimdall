@@ -10,10 +10,15 @@ namespace Heimdall.Core.Polling;
 /// runs, folds the latest run per pipeline line through the state machine, and raises transition,
 /// aggregate, and snapshot events. A single sequential loop owns the state map (no locking needed).
 /// </summary>
-public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engine)
+public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engine, TimeProvider? timeProvider = null)
 {
+    // Pipelines whose latest run is older than this are dropped from tracking entirely — stale clutter
+    // that should not colour the tray, notify, or appear in the menu.
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromDays(30);
+
     private readonly IGitHubGateway _gateway = gateway;
     private readonly RelevanceEngine _engine = engine;
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private Dictionary<PipelineKey, PipelineState> _states = new();
 
     /// <summary>Fired once per settled green↔red flip (suppressed when notifications are disabled).</summary>
@@ -85,7 +90,12 @@ public sealed class PollingService(IGitHubGateway gateway, RelevanceEngine engin
                 }
             }
 
-            _states = new Dictionary<PipelineKey, PipelineState>(PipelineStateMachine.Prune(_states, seen));
+            // Prune retains failing lines even when unseen (so a recovery can still notify); age-based
+            // eviction is layered on here, where the cycle clock lives, to finally drop stale pipelines.
+            var now = _time.GetUtcNow();
+            _states = PipelineStateMachine.Prune(_states, seen)
+                .Where(kv => now - kv.Value.LastRun.CreatedAt <= StaleAfter)
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
             Aggregate?.Invoke(PipelineStateMachine.Aggregate(_states.Values.Where(s => s.CountsTowardTray), connected: true));
             Snapshot?.Invoke(_states.Values.ToList());
         }
