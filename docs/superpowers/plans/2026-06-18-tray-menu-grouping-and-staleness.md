@@ -16,6 +16,8 @@
 - Dots: Failing `🔴`, Running `🟡`, Passing `🟢`, Unknown `⚪`. Text: `failing` / `running` / `passing` / `unknown`.
 - Pipeline label inside a submenu: `{WorkflowName} · {HeadBranch} — {word}`. Repo header: `{dot} {owner}/{repo}`.
 - Ordering: repos by health (Failing→Running→Passing→Unknown) then `owner/repo` alphabetical (ordinal, case-insensitive); pipelines within a repo by workflow name then branch (ordinal, case-insensitive).
+- The repo list contains only **tray-counting** pipelines (`CountsTowardTray == true`). Announce-only pipelines (`CountsTowardTray == false`) are excluded from repos entirely and surfaced under "Recently announced".
+- "Recently announced": a single expandable item below the separator, shown only when there is ≥1 announce-only pipeline; its submenu lists announce-only pipelines ordered by `LastRun.CreatedAt` descending, capped at `RecentlyAnnouncedLimit = 10`; each entry label is `{dot} {owner}/{repo} · {workflow} · {branch} — {word}` (full owner/repo prefix), click opens `HtmlUrl`; the parent line has no click action.
 - The macOS native-menu exporter requires the menu be rebuilt **in place** (`_menu.Items.Clear()` then re-add) — never reassign `_trayIcon.Menu`. Preserve this.
 - No new production NuGet packages (`TimeProvider` is in the BCL). No new test packages (use a hand-written test `TimeProvider`).
 - Comments explain *why*, not *what* (per repo convention).
@@ -565,6 +567,391 @@ git commit -m "feat: group tray menu by repo with expandable pipeline submenus"
 
 ---
 
+### Task 4: Recently-announced submenu + exclude announce-only from repo dots
+
+**Files:**
+- Modify: `src/Heimdall/TrayMenuModel.cs`
+- Modify: `src/Heimdall.UiTests/TrayMenuModelTests.cs`
+- Modify: `src/Heimdall/HeimdallOrchestrator.cs` (`RebuildMenu`)
+- Modify (tidy): `src/Heimdall.Tests/Polling/PipelineStalenessTests.cs`
+
+**Interfaces:**
+- Consumes: `PipelineState.CountsTowardTray` (bool; `true` = drives tray colour, `false` = announce-only), `PipelineState.LastRun.CreatedAt`, `Shell.OpenUrl`.
+- Produces (replaces Task 2's return shape):
+  - `internal sealed record TrayMenu(IReadOnlyList<TrayMenuRepoGroup> Repos, IReadOnlyList<TrayMenuEntry> RecentlyAnnounced)`
+  - `TrayMenuModel.Build(IReadOnlyList<PipelineState>)` now returns `TrayMenu` (was `IReadOnlyList<TrayMenuRepoGroup>`).
+  - `TrayMenuEntry` and `TrayMenuRepoGroup` unchanged.
+
+Background: `PipelineState.CountsTowardTray` defaults to `true`; `PollingService` sets it `false` for announce-only pipelines (`_states[key] = state with { CountsTowardTray = isRelevant }`). The repo list must use only tray-counting pipelines so repo dots match the tray icon; announce-only pipelines move to "Recently announced".
+
+- [ ] **Step 1: Update the tests (TDD — change return shape + add announce coverage)**
+
+Replace the body of `src/Heimdall.UiTests/TrayMenuModelTests.cs` with (the `Pipeline` helper gains `countsTowardTray` and `createdAt`; existing assertions move from the bare list to `.Repos`; new announce tests added):
+
+```csharp
+using Heimdall;
+using Heimdall.Core.Models;
+using Shouldly;
+
+namespace Heimdall.UiTests;
+
+public class TrayMenuModelTests
+{
+    private static PipelineState Pipeline(
+        string owner, string repo, string branch, string workflow,
+        RunStatus settled, bool inProgress = false, long workflowId = 1,
+        bool countsTowardTray = true, DateTimeOffset? createdAt = null)
+    {
+        var run = new RunRecord(
+            RunId: 1, WorkflowId: workflowId, WorkflowName: workflow,
+            RepoOwner: owner, RepoName: repo, HeadBranch: branch, Event: "push",
+            RunNumber: 1, Status: settled, TriggeringActorLogin: "alice",
+            PullRequestNumbers: [], PullRequestAuthorLogins: [],
+            HtmlUrl: $"https://github.com/{owner}/{repo}/actions/{workflow}/{branch}",
+            CreatedAt: createdAt ?? DateTimeOffset.UnixEpoch);
+        return new PipelineState(new PipelineKey(owner, repo, workflowId, branch), settled, inProgress, 1, run)
+        {
+            CountsTowardTray = countsTowardTray,
+        };
+    }
+
+    [Fact]
+    public void Groups_pipelines_under_their_repo_with_a_header_dot()
+    {
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "main", "build", RunStatus.Success),
+            Pipeline("acme", "web", "main", "deploy", RunStatus.Success, workflowId: 2),
+        ]);
+
+        menu.Repos.Count.ShouldBe(1);
+        menu.Repos[0].Header.ShouldBe("🟢 acme/web");
+        menu.Repos[0].Pipelines.Count.ShouldBe(2);
+        menu.RecentlyAnnounced.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Repo_health_is_failure_first()
+    {
+        // A repo with a failing line and an in-progress line reads as failing (🔴), matching the tray.
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "api", "main", "ci", RunStatus.Failure),
+            Pipeline("acme", "api", "dev", "ci", RunStatus.Success, inProgress: true, workflowId: 2),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🔴 acme/api");
+    }
+
+    [Fact]
+    public void Repos_are_ordered_unhealthy_first_then_alphabetical()
+    {
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "docs", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "api", "main", "ci", RunStatus.Failure),
+            Pipeline("acme", "web", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "worker", "main", "ci", RunStatus.Success, inProgress: true),
+        ]);
+
+        menu.Repos.Select(g => g.Header).ShouldBe(
+        [
+            "🔴 acme/api",     // failing
+            "🟡 acme/worker",  // running
+            "🟢 acme/docs",    // passing, alphabetical
+            "🟢 acme/web",
+        ]);
+    }
+
+    [Fact]
+    public void Pipelines_within_a_repo_are_ordered_by_workflow_then_branch()
+    {
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "release", "deploy", RunStatus.Success, workflowId: 2),
+            Pipeline("acme", "web", "main", "deploy", RunStatus.Success, workflowId: 2),
+            Pipeline("acme", "web", "main", "build", RunStatus.Success, workflowId: 1),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Pipelines.Select(p => p.Label).ShouldBe(
+        [
+            "build · main — passing",
+            "deploy · main — passing",
+            "deploy · release — passing",
+        ]);
+    }
+
+    [Theory]
+    [InlineData(RunStatus.Failure, false, "🔴", "failing")]
+    [InlineData(RunStatus.Success, true, "🟡", "running")]
+    [InlineData(RunStatus.Success, false, "🟢", "passing")]
+    [InlineData(RunStatus.Unknown, false, "⚪", "unknown")]
+    public void Maps_each_state_to_its_dot_and_word(RunStatus settled, bool inProgress, string dot, string word)
+    {
+        var entry = TrayMenuModel
+            .Build([Pipeline("acme", "web", "main", "ci", settled, inProgress)])
+            .Repos.ShouldHaveSingleItem()
+            .Pipelines.ShouldHaveSingleItem();
+
+        entry.Dot.ShouldBe(dot);
+        entry.Label.ShouldEndWith($"— {word}");
+    }
+
+    [Fact]
+    public void Empty_input_produces_no_repos_and_no_announcements()
+    {
+        var menu = TrayMenuModel.Build([]);
+
+        menu.Repos.ShouldBeEmpty();
+        menu.RecentlyAnnounced.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Announce_only_pipelines_are_excluded_from_repos_and_listed_under_recently_announced()
+    {
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "api", "main", "release", RunStatus.Failure, countsTowardTray: false),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🟢 acme/web");
+        var announced = menu.RecentlyAnnounced.ShouldHaveSingleItem();
+        announced.Dot.ShouldBe("🔴");
+        announced.Label.ShouldBe("acme/api · release · main — failing");
+    }
+
+    [Fact]
+    public void Announce_only_failure_does_not_redden_its_repo_dot()
+    {
+        // An announce-only failing run in the same repo must not affect the repo's health dot.
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "web", "main", "release", RunStatus.Failure, workflowId: 2, countsTowardTray: false),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🟢 acme/web");
+    }
+
+    [Fact]
+    public void Recently_announced_is_newest_first_and_capped_at_ten()
+    {
+        var epoch = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var pipelines = Enumerable.Range(0, 12)
+            .Select(i => Pipeline(
+                "acme", "repo" + i, "main", "release", RunStatus.Success,
+                countsTowardTray: false, createdAt: epoch.AddDays(i)))
+            .ToList();
+
+        var announced = TrayMenuModel.Build(pipelines).RecentlyAnnounced;
+
+        announced.Count.ShouldBe(10);
+        announced[0].Label.ShouldBe("acme/repo11 · release · main — passing"); // newest
+        announced[9].Label.ShouldBe("acme/repo2 · release · main — passing");  // 10th newest
+    }
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `dotnet test src/Heimdall.UiTests/Heimdall.UiTests.csproj --filter FullyQualifiedName~TrayMenuModelTests`
+Expected: FAILS to compile — `Build(...)` still returns `IReadOnlyList<TrayMenuRepoGroup>`, so `.Repos` / `.RecentlyAnnounced` do not exist (`CS1061`).
+
+- [ ] **Step 3: Update `TrayMenuModel` to return `TrayMenu`**
+
+In `src/Heimdall/TrayMenuModel.cs`, add the `TrayMenu` record after the existing records:
+
+```csharp
+/// <summary>A repo's top-level menu line plus the pipelines revealed when it is expanded.</summary>
+internal sealed record TrayMenuRepoGroup(string Header, IReadOnlyList<TrayMenuEntry> Pipelines);
+
+/// <summary>The full tray menu model: health-grouped repos plus the recently-announced releases.</summary>
+internal sealed record TrayMenu(IReadOnlyList<TrayMenuRepoGroup> Repos, IReadOnlyList<TrayMenuEntry> RecentlyAnnounced);
+```
+
+Add the limit constant inside the class (next to the `Health` enum):
+
+```csharp
+    // Ordered worst-first so the enum value doubles as the sort key and the repo aggregate is a Min().
+    private enum Health { Failing, Running, Passing, Unknown }
+
+    private const int RecentlyAnnouncedLimit = 10;
+```
+
+Replace the `Build` method (currently an expression-bodied member returning the list) with:
+
+```csharp
+    public static TrayMenu Build(IReadOnlyList<PipelineState> pipelines)
+    {
+        var repos = pipelines
+            .Where(p => p.CountsTowardTray)
+            .GroupBy(p => $"{p.Key.Owner}/{p.Key.Repo}")
+            .Select(group => (
+                Slug: group.Key,
+                Health: group.Select(Classify).Min(),
+                Entries: group
+                    .OrderBy(p => p.LastRun.WorkflowName, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(p => p.Key.HeadBranch, StringComparer.OrdinalIgnoreCase)
+                    .Select(p => new TrayMenuEntry(
+                        Dot(Classify(p)),
+                        $"{p.LastRun.WorkflowName} · {p.Key.HeadBranch} — {Word(Classify(p))}",
+                        p.LastRun.HtmlUrl))
+                    .ToList()))
+            .OrderBy(g => g.Health)
+            .ThenBy(g => g.Slug, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new TrayMenuRepoGroup($"{Dot(g.Health)} {g.Slug}", g.Entries))
+            .ToList();
+
+        // Announce-only pipelines are tracked for release notifications but excluded from the tray
+        // colour, so they live in their own recency-ordered list rather than skewing repo health.
+        var recentlyAnnounced = pipelines
+            .Where(p => !p.CountsTowardTray)
+            .OrderByDescending(p => p.LastRun.CreatedAt)
+            .ThenBy(p => p.LastRun.HtmlUrl, StringComparer.Ordinal)
+            .Take(RecentlyAnnouncedLimit)
+            .Select(p => new TrayMenuEntry(
+                Dot(Classify(p)),
+                $"{p.Key.Owner}/{p.Key.Repo} · {p.LastRun.WorkflowName} · {p.Key.HeadBranch} — {Word(Classify(p))}",
+                p.LastRun.HtmlUrl))
+            .ToList();
+
+        return new TrayMenu(repos, recentlyAnnounced);
+    }
+```
+
+(The `Classify`, `Dot`, and `Word` helpers below are unchanged.)
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `dotnet test src/Heimdall.UiTests/Heimdall.UiTests.csproj --filter FullyQualifiedName~TrayMenuModelTests`
+Expected: PASS (all `TrayMenuModelTests`, including the new announce tests).
+
+- [ ] **Step 5: Render the recently-announced submenu in `RebuildMenu`**
+
+In `src/Heimdall/HeimdallOrchestrator.cs`, replace the `RebuildMenu` body (everything between `_menu.Items.Clear();` and the final Settings/Quit block) so it consumes `TrayMenu`, factors the submenu-building into a local helper (avoids duplicating the item+click logic), and adds the "Recently announced" item after the separator. Replace:
+
+```csharp
+        _menu.Items.Clear();
+
+        var groups = TrayMenuModel.Build(pipelines);
+        if (groups.Count == 0)
+        {
+            _menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
+        }
+        else
+        {
+            foreach (var group in groups)
+            {
+                var submenu = new NativeMenu();
+                foreach (var entry in group.Pipelines)
+                {
+                    var item = new NativeMenuItem($"{entry.Dot} {entry.Label}");
+                    var url = entry.Url;
+                    item.Click += (_, _) => Shell.OpenUrl(url);
+                    submenu.Items.Add(item);
+                }
+
+                _menu.Items.Add(new NativeMenuItem(group.Header) { Menu = submenu });
+            }
+        }
+
+        _menu.Items.Add(new NativeMenuItemSeparator());
+
+        var settings = new NativeMenuItem("Settings…");
+```
+
+with:
+
+```csharp
+        _menu.Items.Clear();
+
+        var menu = TrayMenuModel.Build(pipelines);
+        if (menu.Repos.Count == 0)
+        {
+            _menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
+        }
+        else
+        {
+            foreach (var group in menu.Repos)
+                _menu.Items.Add(new NativeMenuItem(group.Header) { Menu = SubmenuOf(group.Pipelines) });
+        }
+
+        _menu.Items.Add(new NativeMenuItemSeparator());
+
+        // Announce-only releases live below the separator and only when there are any to show.
+        if (menu.RecentlyAnnounced.Count > 0)
+            _menu.Items.Add(new NativeMenuItem("Recently announced") { Menu = SubmenuOf(menu.RecentlyAnnounced) });
+
+        var settings = new NativeMenuItem("Settings…");
+```
+
+Then add this local helper inside `RebuildMenu`, after the Quit block (still inside the method):
+
+```csharp
+        var quit = new NativeMenuItem("Quit");
+        quit.Click += (_, _) => Quit();
+        _menu.Items.Add(quit);
+
+        static NativeMenu SubmenuOf(IReadOnlyList<TrayMenuEntry> entries)
+        {
+            var submenu = new NativeMenu();
+            foreach (var entry in entries)
+            {
+                var item = new NativeMenuItem($"{entry.Dot} {entry.Label}");
+                var url = entry.Url; // capture per-iteration so each item opens its own run
+                item.Click += (_, _) => Shell.OpenUrl(url);
+                submenu.Items.Add(item);
+            }
+
+            return submenu;
+        }
+```
+
+- [ ] **Step 6: Tidy — pin the staleness boundary (clears a logged Minor from Task 1)**
+
+In `src/Heimdall.Tests/Polling/PipelineStalenessTests.cs`, add a test pinning the exact-30-days boundary (the predicate is `<= StaleAfter`, so exactly 30 days is kept):
+
+```csharp
+    [Fact]
+    public async Task A_pipeline_exactly_at_the_window_boundary_is_kept()
+    {
+        var gateway = new FakeGitHubGateway
+        {
+            OnGetRuns = _ => [Run(RunStatus.Success, actor: "alice", createdAt: Now.AddDays(-30))]
+        };
+        var service = NewService(gateway, new TestTimeProvider(Now));
+        IReadOnlyList<PipelineState>? snapshot = null;
+        service.Snapshot += s => snapshot = s;
+
+        await service.PollOnceAsync(Settings(), default);
+
+        snapshot.ShouldNotBeNull();
+        snapshot.Count.ShouldBe(1);
+    }
+```
+
+- [ ] **Step 7: Build and run both suites**
+
+Run: `dotnet build src/Heimdall/Heimdall.csproj`
+Expected: succeeds, no warnings.
+
+Run: `dotnet test Heimdall.slnx`
+Expected: PASS (all core + UI tests, including the new announce and boundary tests).
+
+- [ ] **Step 8: Manual smoke check (best effort)**
+
+If a tray GUI can be launched here: `dotnet run --project src/Heimdall/Heimdall.csproj` and confirm announce-only workflows no longer affect repo dots and appear under a "Recently announced" submenu below the separator. If the environment has no display, note that and rely on the suites + review.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/Heimdall/TrayMenuModel.cs src/Heimdall.UiTests/TrayMenuModelTests.cs src/Heimdall/HeimdallOrchestrator.cs src/Heimdall.Tests/Polling/PipelineStalenessTests.cs
+git commit -m "feat: surface announce-only workflows in a recently-announced submenu"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
@@ -572,8 +959,9 @@ git commit -m "feat: group tray menu by repo with expandable pipeline submenus"
 - Failure-first health, dots, words, label/header formats → Task 2 + Global Constraints. ✓
 - Ordering (repos unhealthy-first then alphabetical; pipelines workflow→branch) → Task 2 tests + Global Constraints. ✓
 - Repo line expand-only, pipeline click opens URL → Task 3 (`group.Header` item has no `Click`; entries keep `Click`). ✓
-- Empty state "No pipelines yet" preserved (now keyed off `groups.Count == 0`) → Task 3. ✓
-- In-place menu rebuild preserved (`_menu.Items.Clear()`, no reassignment) → Task 3. ✓
+- Empty state "No pipelines yet" preserved (now keyed off `Repos.Count == 0`) → Task 3, updated in Task 4. ✓
+- In-place menu rebuild preserved (`_menu.Items.Clear()`, no reassignment) → Task 3, Task 4. ✓
+- Announce-only excluded from repos so dots match the tray; "Recently announced" submenu below separator, 10-capped, newest-first, owner/repo-prefixed labels, shown only when non-empty → Task 4 (`TrayMenu` return shape, `RebuildMenu`). ✓
 - 30-day eviction across tray colour + notifications + snapshot, clock injected, `StaleAfter` const → Task 1. ✓
 - `RunBuilder` default fix so existing tests stay fresh → Task 1 Step 2 + Step 7. ✓
 - Test clock without new package → Task 1 Step 1 (`TestTimeProvider`). ✓

@@ -35,6 +35,7 @@ aggregate health:
 🟢 acme/docs
 🟢 acme/web
 ─────────────
+Recently announced  ▸
 Settings…
 Quit
 ```
@@ -53,8 +54,38 @@ Behaviour:
 - The repo line only expands; it has no click action.
 - Each pipeline line keeps today's behaviour: clicking opens its `HtmlUrl`.
 - Empty state ("No pipelines yet", disabled) is unchanged, and applies when no
-  non-stale pipelines exist.
+  tray-counting (non-stale) pipelines exist.
 - The Settings…/Quit chrome and the separator are unchanged.
+- The repo list contains only **tray-counting** pipelines (`CountsTowardTray`).
+  Announce-only pipelines (tracked for release notifications but excluded from the
+  tray colour) are surfaced separately under "Recently announced" (below), so a repo
+  dot can never disagree with the tray icon.
+
+### Recently announced
+
+Announce-only pipelines (`CountsTowardTray == false`) are the workflows a user adds
+to a repo's announce list that are not otherwise relevant to them — they fire
+"released/shipped" notifications but must not colour the tray. They do not belong in
+the health list, so they are collected into a single expandable **"Recently
+announced"** item placed *below the separator*, above Settings…:
+
+```
+─────────────
+Recently announced  ▸   🟢 acme/api · release · main — passing
+                        🔴 acme/web · deploy · main — failing
+Settings…
+Quit
+```
+
+- The "Recently announced" parent line only expands (no click action) and is shown
+  **only when there is at least one announce-only pipeline** — otherwise it is omitted
+  entirely.
+- Its submenu lists the most recent announce-only pipelines by `LastRun.CreatedAt`
+  descending, capped at the 10 newest (`RecentlyAnnouncedLimit = 10`). The 30-day
+  staleness eviction already applies upstream, so these are recent by construction.
+- Each entry keeps the full `owner/repo` prefix (there is no parent repo here):
+  `{dot} {owner}/{repo} · {workflow} · {branch} — {word}`, using the same `Classify`
+  dot/word as the health list. Clicking opens its `HtmlUrl`.
 
 ### Repo health aggregation
 
@@ -70,9 +101,11 @@ never disagree:
 | else `LastSettledStatus == Success` | Passing | 🟢  | passing     |
 | otherwise                           | Unknown | ⚪  | unknown     |
 
-A repo's health is the worst of its pipelines' healths under the precedence
-Failing > Running > Passing > Unknown (i.e. the minimum when the enum is ordered
-`Failing=0 … Unknown=3`). The repo's dot and ordering group both come from this.
+A repo's health is the worst of its **tray-counting** pipelines' healths under the
+precedence Failing > Running > Passing > Unknown (i.e. the minimum when the enum is
+ordered `Failing=0 … Unknown=3`). The repo's dot and ordering group both come from
+this. Announce-only pipelines are excluded from the repo entirely (see "Recently
+announced"), which is what lets repo dots, pipeline dots, and the tray icon agree.
 
 Note this is failure-first, unlike today's `Describe` (which checks `InProgress`
 first). A pipeline that last failed and is now re-running therefore reads
@@ -155,20 +188,23 @@ All menu changes are contained in `HeimdallOrchestrator`
 on each `Snapshot` event (the in-place `_menu.Items.Clear()` + rebuild approach is
 required by the macOS native-menu exporter and is preserved).
 
-- `RebuildMenu` groups the incoming pipelines by `owner/repo`, builds a parent
-  `NativeMenuItem` per repo with the health dot in its `Header`, assigns a child
-  `NativeMenu` to the parent's `.Menu` property to form the submenu, and adds the
-  per-pipeline `NativeMenuItem`s (with click → `Shell.OpenUrl(url)`) to that child.
-- A new pure static helper (`TrayMenuModel`) performs `Classify` + grouping + health
-  aggregation + ordering, taking `IReadOnlyList<PipelineState>` and returning the
-  ordered repo groups (each with a header string and its pipeline entries). Keeping
-  it free of Avalonia types makes it unit-testable from `Heimdall.UiTests` (which
-  already has `InternalsVisibleTo`).
+- A new pure static helper (`TrayMenuModel`) performs `Classify` + partitioning +
+  grouping + health aggregation + ordering, taking `IReadOnlyList<PipelineState>` and
+  returning a `TrayMenu` with two parts: `Repos` (the ordered repo groups, each a
+  header string + its pipeline entries) and `RecentlyAnnounced` (the ordered,
+  10-capped announce-only entries). Keeping it free of Avalonia types makes it
+  unit-testable from `Heimdall.UiTests` (which already has `InternalsVisibleTo`).
+- `RebuildMenu` renders that model: for each repo group, a parent `NativeMenuItem`
+  with the health dot in its `Header` and a child `NativeMenu` of per-pipeline items
+  (click → `Shell.OpenUrl(url)`); then the separator; then, only when
+  `RecentlyAnnounced` is non-empty, a "Recently announced" parent `NativeMenuItem`
+  with a child `NativeMenu` of its entries (click → `Shell.OpenUrl(url)`); then
+  Settings…/Quit.
 - The dot/word mappings live in `TrayMenuModel` and replace the old running-first
   `Describe`; both the dot and the text suffix derive from the one `Classify`.
 
-The empty-state branch (`pipelines.Count == 0`) and the Settings/Quit construction
-are unchanged.
+The empty-state branch ("No pipelines yet", now keyed off `Repos.Count == 0`) and the
+Settings/Quit construction are otherwise unchanged.
 
 ## Testing
 
@@ -193,10 +229,14 @@ are unchanged.
 
 Unit tests on the pure grouping/health/ordering helper:
 
-- Pipelines grouped under the correct `owner/repo`.
+- Pipelines grouped under the correct `owner/repo` (tray-counting only).
 - Repo health precedence: failing > running > passing > unknown.
 - Ordering: failing → running → passing → unknown, alphabetical within group.
 - Status→dot mapping for each `RunStatus`/`InProgress` combination.
+- Announce-only pipelines (`CountsTowardTray == false`) are excluded from `Repos` and
+  do not affect any repo dot.
+- `RecentlyAnnounced` contains only announce-only pipelines, ordered by
+  `LastRun.CreatedAt` descending, capped at 10, with the `owner/repo`-prefixed label.
 
 ## Out of scope
 
