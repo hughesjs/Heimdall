@@ -60,6 +60,23 @@ public class PipelineStalenessTests
     }
 
     [Fact]
+    public async Task A_pipeline_exactly_at_the_window_boundary_is_kept()
+    {
+        var gateway = new FakeGitHubGateway
+        {
+            OnGetRuns = _ => [Run(RunStatus.Success, actor: "alice", createdAt: Now.AddDays(-30))]
+        };
+        var service = NewService(gateway, new TestTimeProvider(Now));
+        IReadOnlyList<PipelineState>? snapshot = null;
+        service.Snapshot += s => snapshot = s;
+
+        await service.PollOnceAsync(Settings(), default);
+
+        snapshot.ShouldNotBeNull();
+        snapshot.Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task A_failing_line_is_evicted_once_it_ages_out_despite_prune_retention()
     {
         var start = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);

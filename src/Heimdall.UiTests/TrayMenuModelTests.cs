@@ -8,7 +8,8 @@ public class TrayMenuModelTests
 {
     private static PipelineState Pipeline(
         string owner, string repo, string branch, string workflow,
-        RunStatus settled, bool inProgress = false, long workflowId = 1)
+        RunStatus settled, bool inProgress = false, long workflowId = 1,
+        bool countsTowardTray = true, DateTimeOffset? createdAt = null)
     {
         var run = new RunRecord(
             RunId: 1, WorkflowId: workflowId, WorkflowName: workflow,
@@ -16,41 +17,45 @@ public class TrayMenuModelTests
             RunNumber: 1, Status: settled, TriggeringActorLogin: "alice",
             PullRequestNumbers: [], PullRequestAuthorLogins: [],
             HtmlUrl: $"https://github.com/{owner}/{repo}/actions/{workflow}/{branch}",
-            CreatedAt: DateTimeOffset.UnixEpoch);
-        return new PipelineState(new PipelineKey(owner, repo, workflowId, branch), settled, inProgress, 1, run);
+            CreatedAt: createdAt ?? DateTimeOffset.UnixEpoch);
+        return new PipelineState(new PipelineKey(owner, repo, workflowId, branch), settled, inProgress, 1, run)
+        {
+            CountsTowardTray = countsTowardTray,
+        };
     }
 
     [Fact]
     public void Groups_pipelines_under_their_repo_with_a_header_dot()
     {
-        var groups = TrayMenuModel.Build(
+        var menu = TrayMenuModel.Build(
         [
             Pipeline("acme", "web", "main", "build", RunStatus.Success),
             Pipeline("acme", "web", "main", "deploy", RunStatus.Success, workflowId: 2),
         ]);
 
-        groups.Count.ShouldBe(1);
-        groups[0].Header.ShouldBe("🟢 acme/web");
-        groups[0].Pipelines.Count.ShouldBe(2);
+        menu.Repos.Count.ShouldBe(1);
+        menu.Repos[0].Header.ShouldBe("🟢 acme/web");
+        menu.Repos[0].Pipelines.Count.ShouldBe(2);
+        menu.RecentlyAnnounced.ShouldBeEmpty();
     }
 
     [Fact]
     public void Repo_health_is_failure_first()
     {
         // A repo with a failing line and an in-progress line reads as failing (🔴), matching the tray.
-        var groups = TrayMenuModel.Build(
+        var menu = TrayMenuModel.Build(
         [
             Pipeline("acme", "api", "main", "ci", RunStatus.Failure),
             Pipeline("acme", "api", "dev", "ci", RunStatus.Success, inProgress: true, workflowId: 2),
         ]);
 
-        groups.ShouldHaveSingleItem().Header.ShouldBe("🔴 acme/api");
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🔴 acme/api");
     }
 
     [Fact]
     public void Repos_are_ordered_unhealthy_first_then_alphabetical()
     {
-        var groups = TrayMenuModel.Build(
+        var menu = TrayMenuModel.Build(
         [
             Pipeline("acme", "docs", "main", "ci", RunStatus.Success),
             Pipeline("acme", "api", "main", "ci", RunStatus.Failure),
@@ -58,7 +63,7 @@ public class TrayMenuModelTests
             Pipeline("acme", "worker", "main", "ci", RunStatus.Success, inProgress: true),
         ]);
 
-        groups.Select(g => g.Header).ShouldBe(
+        menu.Repos.Select(g => g.Header).ShouldBe(
         [
             "🔴 acme/api",     // failing
             "🟡 acme/worker",  // running
@@ -70,14 +75,14 @@ public class TrayMenuModelTests
     [Fact]
     public void Pipelines_within_a_repo_are_ordered_by_workflow_then_branch()
     {
-        var groups = TrayMenuModel.Build(
+        var menu = TrayMenuModel.Build(
         [
             Pipeline("acme", "web", "release", "deploy", RunStatus.Success, workflowId: 2),
             Pipeline("acme", "web", "main", "deploy", RunStatus.Success, workflowId: 2),
             Pipeline("acme", "web", "main", "build", RunStatus.Success, workflowId: 1),
         ]);
 
-        groups.ShouldHaveSingleItem().Pipelines.Select(p => p.Label).ShouldBe(
+        menu.Repos.ShouldHaveSingleItem().Pipelines.Select(p => p.Label).ShouldBe(
         [
             "build · main — passing",
             "deploy · main — passing",
@@ -94,10 +99,64 @@ public class TrayMenuModelTests
     {
         var entry = TrayMenuModel
             .Build([Pipeline("acme", "web", "main", "ci", settled, inProgress)])
-            .ShouldHaveSingleItem()
+            .Repos.ShouldHaveSingleItem()
             .Pipelines.ShouldHaveSingleItem();
 
         entry.Dot.ShouldBe(dot);
         entry.Label.ShouldEndWith($"— {word}");
+    }
+
+    [Fact]
+    public void Empty_input_produces_no_repos_and_no_announcements()
+    {
+        var menu = TrayMenuModel.Build([]);
+
+        menu.Repos.ShouldBeEmpty();
+        menu.RecentlyAnnounced.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Announce_only_pipelines_are_excluded_from_repos_and_listed_under_recently_announced()
+    {
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "api", "main", "release", RunStatus.Failure, countsTowardTray: false),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🟢 acme/web");
+        var announced = menu.RecentlyAnnounced.ShouldHaveSingleItem();
+        announced.Dot.ShouldBe("🔴");
+        announced.Label.ShouldBe("acme/api · release · main — failing");
+    }
+
+    [Fact]
+    public void Announce_only_failure_does_not_redden_its_repo_dot()
+    {
+        // An announce-only failing run in the same repo must not affect the repo's health dot.
+        var menu = TrayMenuModel.Build(
+        [
+            Pipeline("acme", "web", "main", "ci", RunStatus.Success),
+            Pipeline("acme", "web", "main", "release", RunStatus.Failure, workflowId: 2, countsTowardTray: false),
+        ]);
+
+        menu.Repos.ShouldHaveSingleItem().Header.ShouldBe("🟢 acme/web");
+    }
+
+    [Fact]
+    public void Recently_announced_is_newest_first_and_capped_at_ten()
+    {
+        var epoch = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var pipelines = Enumerable.Range(0, 12)
+            .Select(i => Pipeline(
+                "acme", "repo" + i, "main", "release", RunStatus.Success,
+                countsTowardTray: false, createdAt: epoch.AddDays(i)))
+            .ToList();
+
+        var announced = TrayMenuModel.Build(pipelines).RecentlyAnnounced;
+
+        announced.Count.ShouldBe(10);
+        announced[0].Label.ShouldBe("acme/repo11 · release · main — passing"); // newest
+        announced[9].Label.ShouldBe("acme/repo2 · release · main — passing");  // 10th newest
     }
 }
