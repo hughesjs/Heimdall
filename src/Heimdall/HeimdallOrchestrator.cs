@@ -133,9 +133,10 @@ internal sealed class HeimdallOrchestrator(
                 _availableUpdate = (release.TagName, release.HtmlUrl);
 
                 var current = AppVersion.Current;
+                // Floor the patch component: System.Version reports -1 for an unspecified component.
                 _ = notifications.ShowAsync(
                     $"Heimdall {release.TagName} available",
-                    $"You're on v{current.Major}.{current.Minor}.{current.Build} — click the tray menu to update.");
+                    $"You're on v{current.Major}.{current.Minor}.{Math.Max(current.Build, 0)} — click the tray menu to update.");
 
                 RebuildMenu(_pipelines);
             });
