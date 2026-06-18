@@ -133,23 +133,22 @@ internal sealed class HeimdallOrchestrator(
     {
         _menu.Items.Clear();
 
-        if (pipelines.Count == 0)
+        var menu = TrayMenuModel.Build(pipelines);
+        if (menu.Repos.Count == 0)
         {
             _menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
         }
         else
         {
-            foreach (var pipeline in pipelines.OrderBy(p => p.Key.Repo).ThenBy(p => p.Key.HeadBranch))
-            {
-                var label = $"{pipeline.Key.Owner}/{pipeline.Key.Repo} · {pipeline.LastRun.WorkflowName} · {pipeline.Key.HeadBranch} — {Describe(pipeline)}";
-                var item = new NativeMenuItem(label);
-                var url = pipeline.LastRun.HtmlUrl;
-                item.Click += (_, _) => Shell.OpenUrl(url);
-                _menu.Items.Add(item);
-            }
+            foreach (var group in menu.Repos)
+                _menu.Items.Add(new NativeMenuItem(group.Header) { Menu = SubmenuOf(group.Pipelines) });
         }
 
         _menu.Items.Add(new NativeMenuItemSeparator());
+
+        // Announce-only releases live below the separator and only when there are any to show.
+        if (menu.RecentlyAnnounced.Count > 0)
+            _menu.Items.Add(new NativeMenuItem("Recently announced") { Menu = SubmenuOf(menu.RecentlyAnnounced) });
 
         var settings = new NativeMenuItem("Settings…");
         settings.Click += (_, _) => ShowSettings();
@@ -158,15 +157,21 @@ internal sealed class HeimdallOrchestrator(
         var quit = new NativeMenuItem("Quit");
         quit.Click += (_, _) => Quit();
         _menu.Items.Add(quit);
-    }
 
-    private static string Describe(PipelineState pipeline) => pipeline switch
-    {
-        { InProgress: true } => "running",
-        { LastSettledStatus: RunStatus.Failure } => "failing",
-        { LastSettledStatus: RunStatus.Success } => "passing",
-        _ => "unknown"
-    };
+        static NativeMenu SubmenuOf(IReadOnlyList<TrayMenuEntry> entries)
+        {
+            var submenu = new NativeMenu();
+            foreach (var entry in entries)
+            {
+                var item = new NativeMenuItem($"{entry.Dot} {entry.Label}");
+                var url = entry.Url; // capture per-iteration so each item opens its own run
+                item.Click += (_, _) => Shell.OpenUrl(url);
+                submenu.Items.Add(item);
+            }
+
+            return submenu;
+        }
+    }
 
     private void ShowSettings()
     {
