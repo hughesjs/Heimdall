@@ -21,6 +21,9 @@ public interface IGitHubGateway
     /// <summary>Lists "owner/repo" for every repo the user can access (their own plus orgs they belong to), for autocomplete.</summary>
     Task<IReadOnlyList<string>> GetAccessibleRepositoriesAsync(CancellationToken cancellationToken);
 
+    /// <summary>Returns the repository's latest published release (excluding drafts/prereleases), or null if there is none.</summary>
+    Task<ReleaseInfo?> GetLatestReleaseAsync(CancellationToken cancellationToken);
+
     /// <summary>The rate limit reported by the most recent API call, if any.</summary>
     RateLimitInfo? LastRateLimit { get; }
 }

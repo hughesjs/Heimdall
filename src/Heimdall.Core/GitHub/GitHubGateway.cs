@@ -11,6 +11,10 @@ public sealed class GitHubGateway : IGitHubGateway
 {
     private const int RecentRunsPageSize = 50;
 
+    // Heimdall only ever checks itself for updates.
+    private const string SelfOwner = "hughesjs";
+    private const string SelfName = "Heimdall";
+
     private readonly IGitHubClient _client;
     private readonly PullRequestAuthorCache _authors;
 
@@ -70,6 +74,21 @@ public sealed class GitHubGateway : IGitHubGateway
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(fullName => fullName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public async Task<ReleaseInfo?> GetLatestReleaseAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var release = await Guard(() => _client.Repository.Release.GetLatest(SelfOwner, SelfName));
+            CaptureRateLimit();
+            return new ReleaseInfo(release.TagName, release.HtmlUrl);
+        }
+        catch (NotFoundException)
+        {
+            // No published release yet — not an error for our purposes.
+            return null;
+        }
     }
 
     private async Task<RunRecord> MapAsync(WorkflowRun run, RepoConfig repo, CancellationToken cancellationToken)
