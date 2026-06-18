@@ -63,6 +63,9 @@ internal sealed class FakeGitHubGateway : IGitHubGateway
 
     public Task<IReadOnlyList<string>> GetAccessibleRepositoriesAsync(CancellationToken cancellationToken) =>
         Task.FromResult(OnGetAccessibleRepos());
+
+    public Task<ReleaseInfo?> GetLatestReleaseAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<ReleaseInfo?>(null);
 }
 
 internal sealed class FakeSettingsStore(AppSettings? initial = null) : ISettingsStore
