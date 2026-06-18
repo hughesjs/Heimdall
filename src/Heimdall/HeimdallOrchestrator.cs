@@ -10,6 +10,7 @@ using Heimdall.Core.Notifications;
 using Heimdall.Core.Polling;
 using Heimdall.Core.Rules;
 using Heimdall.Core.Settings;
+using Heimdall.Core.Updates;
 using Heimdall.Platform;
 using Heimdall.ViewModels;
 using Heimdall.Views;
@@ -34,6 +35,10 @@ internal sealed class HeimdallOrchestrator(
 
     private IGitHubGateway? _gateway;
     private SettingsWindow? _settingsWindow;
+
+    private bool _updateChecked;
+    private (string TagName, string Url)? _availableUpdate;
+    private IReadOnlyList<PipelineState> _pipelines = [];
 
     public void Start()
     {
@@ -78,6 +83,12 @@ internal sealed class HeimdallOrchestrator(
         var gateway = new GitHubGateway(GitHubClientFactory.Create(token));
         _gateway = gateway;
 
+        if (!_updateChecked)
+        {
+            _updateChecked = true; // once per launch; a mid-session re-auth must not re-notify
+            _ = CheckForUpdateAsync(gateway, sessionCts.Token);
+        }
+
         var polling = new PollingService(gateway, new RelevanceEngine(StandardRules.All));
         polling.Aggregate += status => Dispatcher.UIThread.Post(() => SetStatus(status));
         polling.Snapshot += pipelines => Dispatcher.UIThread.Post(() => RebuildMenu(pipelines));
@@ -102,6 +113,37 @@ internal sealed class HeimdallOrchestrator(
         }
 
         return reauthRequired && !_cts.IsCancellationRequested;
+    }
+
+    /// <summary>
+    /// Best-effort, once-per-launch check for a newer release. On finding one, shows a notification and
+    /// adds a persistent tray item linking to the release. Any failure (offline, rate-limited, no release)
+    /// is swallowed — an update check must never disrupt the app.
+    /// </summary>
+    private async Task CheckForUpdateAsync(IGitHubGateway gateway, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var release = await gateway.GetLatestReleaseAsync(cancellationToken);
+            if (release is null || !UpdateCheck.IsUpdateAvailable(AppVersion.Current, release.TagName))
+                return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                _availableUpdate = (release.TagName, release.HtmlUrl);
+
+                var current = AppVersion.Current;
+                _ = notifications.ShowAsync(
+                    $"Heimdall {release.TagName} available",
+                    $"You're on v{current.Major}.{current.Minor}.{current.Build} — click the tray menu to update.");
+
+                RebuildMenu(_pipelines);
+            });
+        }
+        catch
+        {
+            // Best-effort: a failed update check must never disrupt the app.
+        }
     }
 
     private async Task<string?> OnboardAsync()
@@ -131,6 +173,7 @@ internal sealed class HeimdallOrchestrator(
     // its items in place rather than replacing _trayIcon.Menu.
     private void RebuildMenu(IReadOnlyList<PipelineState> pipelines)
     {
+        _pipelines = pipelines;
         _menu.Items.Clear();
 
         var menu = TrayMenuModel.Build(pipelines);
@@ -149,6 +192,13 @@ internal sealed class HeimdallOrchestrator(
         // Announce-only releases live below the separator and only when there are any to show.
         if (menu.RecentlyAnnounced.Count > 0)
             _menu.Items.Add(new NativeMenuItem("Recently announced") { Menu = SubmenuOf(menu.RecentlyAnnounced) });
+
+        if (_availableUpdate is { } update)
+        {
+            var updateItem = new NativeMenuItem($"⬆ Update available — {update.TagName}");
+            updateItem.Click += (_, _) => Shell.OpenUrl(update.Url);
+            _menu.Items.Add(updateItem);
+        }
 
         var settings = new NativeMenuItem("Settings…");
         settings.Click += (_, _) => ShowSettings();
