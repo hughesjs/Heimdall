@@ -29,6 +29,7 @@ internal sealed class HeimdallOrchestrator(
     INotificationManager notifications) : IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
+    private readonly NativeMenu _menu = new();
     private readonly TrayIcon _trayIcon = new() { ToolTipText = "Heimdall", IsVisible = true };
 
     private IGitHubGateway? _gateway;
@@ -37,6 +38,7 @@ internal sealed class HeimdallOrchestrator(
     public void Start()
     {
         _trayIcon.Icon = LoadIcon(TrayStatus.Grey);
+        _trayIcon.Menu = _menu;
         RebuildMenu([]);
         TrayIcon.SetIcons(Application.Current!, [_trayIcon]);
         _ = RunAsync();
@@ -123,13 +125,17 @@ internal sealed class HeimdallOrchestrator(
         _trayIcon.ToolTipText = $"Heimdall — {status}";
     }
 
+    // The macOS tray-menu exporter binds its native menu to the first NativeMenu instance it sees and
+    // only supports in-place updates of that instance — assigning a fresh NativeMenu throws
+    // "The menu being updated does not match." So we keep one menu for the app's lifetime and rebuild
+    // its items in place rather than replacing _trayIcon.Menu.
     private void RebuildMenu(IReadOnlyList<PipelineState> pipelines)
     {
-        var menu = new NativeMenu();
+        _menu.Items.Clear();
 
         if (pipelines.Count == 0)
         {
-            menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
+            _menu.Items.Add(new NativeMenuItem("No pipelines yet") { IsEnabled = false });
         }
         else
         {
@@ -139,21 +145,19 @@ internal sealed class HeimdallOrchestrator(
                 var item = new NativeMenuItem(label);
                 var url = pipeline.LastRun.HtmlUrl;
                 item.Click += (_, _) => Shell.OpenUrl(url);
-                menu.Items.Add(item);
+                _menu.Items.Add(item);
             }
         }
 
-        menu.Items.Add(new NativeMenuItemSeparator());
+        _menu.Items.Add(new NativeMenuItemSeparator());
 
         var settings = new NativeMenuItem("Settings…");
         settings.Click += (_, _) => ShowSettings();
-        menu.Items.Add(settings);
+        _menu.Items.Add(settings);
 
         var quit = new NativeMenuItem("Quit");
         quit.Click += (_, _) => Quit();
-        menu.Items.Add(quit);
-
-        _trayIcon.Menu = menu;
+        _menu.Items.Add(quit);
     }
 
     private static string Describe(PipelineState pipeline) => pipeline switch
