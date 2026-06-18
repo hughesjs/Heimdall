@@ -58,19 +58,25 @@ Behaviour:
 
 ### Repo health aggregation
 
-A repo's dot and ordering group are derived from its pipelines by worst-first
-precedence:
+A single `Classify(PipelineState)` function maps one pipeline to a health value,
+using the same **failure-first** precedence as the existing tray `Aggregate`
+(`PipelineStateMachine.Aggregate`), so repo dots, pipeline dots, and the tray icon
+never disagree:
 
-| Condition (any pipeline in the repo)            | Dot | Group   |
-|-------------------------------------------------|-----|---------|
-| Any failing (`LastSettledStatus == Failure`)    | 🔴  | failing |
-| Else any in progress (`InProgress`)             | 🟡  | running |
-| Else all passing (`LastSettledStatus == Success`)| 🟢  | passing |
-| Otherwise                                       | ⚪  | unknown |
+| Condition (checked in order)        | Health  | Dot | Text suffix |
+|-------------------------------------|---------|-----|-------------|
+| `LastSettledStatus == Failure`      | Failing | 🔴  | failing     |
+| else `InProgress`                   | Running | 🟡  | running     |
+| else `LastSettledStatus == Success` | Passing | 🟢  | passing     |
+| otherwise                           | Unknown | ⚪  | unknown     |
 
-The per-pipeline dot uses the same status→dot mapping applied to that single
-pipeline (running if `InProgress`, else failing/passing/unknown from
-`LastSettledStatus`), matching today's `Describe` wording for the text suffix.
+A repo's health is the worst of its pipelines' healths under the precedence
+Failing > Running > Passing > Unknown (i.e. the minimum when the enum is ordered
+`Failing=0 … Unknown=3`). The repo's dot and ordering group both come from this.
+
+Note this is failure-first, unlike today's `Describe` (which checks `InProgress`
+first). A pipeline that last failed and is now re-running therefore reads
+`🔴 … — failing`, matching the red tray icon, rather than showing as running.
 
 ### Ordering
 
@@ -91,31 +97,40 @@ before they enter the tracked state map.
 
 ### Where
 
-In `PollingService.LatestTrackedPerKey` (`src/Heimdall.Core/Polling/PollingService.cs`).
-Today it selects the latest run per `PipelineKey`:
+A post-`Prune` age eviction in `PollingService.PollOnceAsync`
+(`src/Heimdall.Core/Polling/PollingService.cs`). Today the cycle ends with:
 
 ```csharp
-.GroupBy(PipelineKey.For)
-.Select(group => group.MaxBy(run => run.RunNumber)!);
+_states = new Dictionary<PipelineKey, PipelineState>(PipelineStateMachine.Prune(_states, seen));
+Aggregate?.Invoke(PipelineStateMachine.Aggregate(_states.Values.Where(s => s.CountsTowardTray), connected: true));
+Snapshot?.Invoke(_states.Values.ToList());
 ```
 
-Add a staleness filter after the latest run is chosen:
+Insert an age filter between `Prune` and the events:
 
 ```csharp
-.GroupBy(PipelineKey.For)
-.Select(group => group.MaxBy(run => run.RunNumber)!)
-.Where(run => now - run.CreatedAt <= StaleAfter);
+var pruned = PipelineStateMachine.Prune(_states, seen);
+_states = pruned
+    .Where(kv => now - kv.Value.LastRun.CreatedAt <= StaleAfter)
+    .ToDictionary(kv => kv.Key, kv => kv.Value);
 ```
 
-`now` is threaded in from the caller (`PollOnceAsync`) so the method stays a pure
-function of its inputs. Because this is upstream of `_states`, a stale pipeline:
+`now` is `_time.GetUtcNow()`, captured once at the top of the cycle. Because the
+eviction runs on the final `_states` map, a stale pipeline never contributes to the
+aggregate tray status and never appears in the menu snapshot.
 
-- never contributes to the aggregate tray status,
-- never fires a transition/announce notification,
-- is pruned implicitly (it is simply never added), and
-- never appears in the menu snapshot.
+**Why here and not at intake.** `PipelineStateMachine.Prune` intentionally retains
+failing lines even when they are not seen in a cycle (so a later recovery can still
+notify), and its doc comment states that age-based eviction "is layered on by the
+polling service, which owns the cycle clock." A filter at run-intake
+(`LatestTrackedPerKey`) would not remove a previously-tracked failure whose branch
+has since gone quiet — `Prune` would keep it red indefinitely. Evicting after
+`Prune` is the single chokepoint that actually removes stale lines and fulfils that
+documented intent.
 
-This is the single chokepoint that realises "filter out entirely".
+Notifications need no separate guard: runs only ever get newer, so a run cannot age
+*into* relevance, and a first sighting of an already-stale run seeds silently (no
+notification) before being evicted the same cycle.
 
 ### Clock injection
 
@@ -123,10 +138,10 @@ This is the single chokepoint that realises "filter out entirely".
 `(IGitHubGateway gateway, RelevanceEngine engine)`. Add an optional
 `TimeProvider? timeProvider = null`, stored as `_time = timeProvider ?? TimeProvider.System`.
 Staleness is measured against `_time.GetUtcNow()`, computed once per cycle in
-`PollOnceAsync` and passed to `LatestTrackedPerKey`.
+`PollOnceAsync`. `TimeProvider` is a BCL type (no new production package).
 
-Rationale: a `FakeTimeProvider` makes the 30-day boundary deterministically testable,
-rather than depending on wall-clock `DateTimeOffset.UtcNow`.
+Rationale: injecting the clock makes the 30-day boundary deterministically testable
+via a tiny test `TimeProvider`, rather than depending on wall-clock `DateTimeOffset.UtcNow`.
 
 ### Constant
 
@@ -144,12 +159,13 @@ required by the macOS native-menu exporter and is preserved).
   `NativeMenuItem` per repo with the health dot in its `Header`, assigns a child
   `NativeMenu` to the parent's `.Menu` property to form the submenu, and adds the
   per-pipeline `NativeMenuItem`s (with click → `Shell.OpenUrl(url)`) to that child.
-- A pure static helper performs grouping + health aggregation + ordering, taking
-  `IReadOnlyList<PipelineState>` and returning the ordered repo groups with their
-  computed health. Keeping it pure (no Avalonia types) makes it unit-testable.
-- A small status→dot mapping (`🔴/🟡/🟢/⚪`) and the repo-health precedence live
-  alongside the existing `Describe` helper. The text suffix continues to use
-  `Describe`.
+- A new pure static helper (`TrayMenuModel`) performs `Classify` + grouping + health
+  aggregation + ordering, taking `IReadOnlyList<PipelineState>` and returning the
+  ordered repo groups (each with a header string and its pipeline entries). Keeping
+  it free of Avalonia types makes it unit-testable from `Heimdall.UiTests` (which
+  already has `InternalsVisibleTo`).
+- The dot/word mappings live in `TrayMenuModel` and replace the old running-first
+  `Describe`; both the dot and the text suffix derive from the one `Classify`.
 
 The empty-state branch (`pipelines.Count == 0`) and the Settings/Quit construction
 are unchanged.
@@ -163,13 +179,15 @@ are unchanged.
   make every existing run ~56 years stale and break the polling suite. Add an
   optional `createdAt` parameter resolving to a recent value (e.g. `DateTimeOffset.UtcNow`
   when not supplied) so existing tests stay fresh by default.
-- **New staleness tests** (using `FakeTimeProvider` set to a fixed instant and
-  explicit `createdAt`):
-  - A pipeline whose latest run is older than 30 days is excluded from the snapshot,
-    does not affect the aggregate tray status, and fires no notification.
-  - A pipeline whose latest run is exactly at / just within 30 days is retained.
-  - A repo whose only pipeline is stale disappears; if all pipelines across all repos
-    are stale, the snapshot is empty.
+- **Test clock:** a tiny `TestTimeProvider : TimeProvider` in `TestSupport` with a
+  settable `Now` (overriding `GetUtcNow()`) — avoids a new NuGet dependency.
+- **New staleness tests** (fixed `Now`, explicit `createdAt`):
+  - A pipeline whose latest run is older than 30 days is excluded from the snapshot
+    and does not affect the aggregate tray status.
+  - A pipeline whose latest run is just within 30 days is retained.
+  - A previously-tracked *failing* pipeline whose branch goes quiet is evicted once
+    its run ages past 30 days (proves eviction beats `Prune`'s failing-line retention):
+    advance `Now` between cycles and assert the snapshot empties and the tray greens.
 
 ### Menu grouping (pure helper)
 
